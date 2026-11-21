@@ -63,6 +63,7 @@
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
             nativeBuildInputs = [ pkgs.makeWrapper ];
+            LEANFRAN_OFFLINE = "1";
             nativeCheckInputs = desktopTools ++ [ pkgs.foot ];
             FONTCONFIG_FILE = fontsConf;
             postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools}";

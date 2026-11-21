@@ -18,15 +18,43 @@ user's cursor or focus. See `README.md` for the goal.
 ## Lean and Rust
 
 - Deterministic logic (seat and desktop state transitions, input
-  validation, coordinate and geometry calculations) is defined in Lean inside
-  `leanfran::lean!` blocks and generated to Rust by `leanfran-build`.
+  validation, coordinate and geometry calculations, keymap layout) is defined
+  in Lean inside `leanfran::lean!` blocks and generated to Rust by
+  `leanfran-build` (`build.rs`). The generated sources are cached in
+  `.leanfran/cache/` and the Lean package in `lean/`; commit both. The Nix
+  build sets `LEANFRAN_OFFLINE=1` and uses the cache only.
 - Rust owns process management (sway, wayvnc), the Wayland protocol clients
   (virtual pointer and keyboard, screen capture), the MCP server, and the CLI
   (`clap`).
 - Every generated function that Rust calls lands in the same change with a
   theorem about a property its callers rely on, and with a `#assay` line in
-  `audit/`. `make check` then also runs `lake -d lean build --wfail` and
-  `lake -d audit build --wfail`.
+  `audit/`. `make check` runs `lake -d lean build --wfail`,
+  `lake -d audit build --wfail`, and checks that `.leanfran` and `lean` match
+  the sources.
+
+### `src/keymap.rs` (`pub mod model`)
+
+`type` uploads a keymap that binds each character of the text to its own
+key. Rust calls `split`, `slots` and `evdevKey`.
+
+- `split cap text` cuts the text into pieces whose keymaps fit in `cap` keys
+  (`keymap::CAPACITY` = 247, xkb keycodes 9 to 255). Theorems: the pieces
+  concatenate to the text (`flatten_split`), every piece is non-empty and
+  needs at most `cap` keys (`split_fits`), and a piece ends only when its
+  keymap is full and the next character is new to it (`split_chained`).
+- `slots text` lists the distinct characters in order of first appearance.
+  Theorems: no character appears twice (`slots_nodup`), and adding a
+  character extends the slots by that character only when it is new
+  (`slots_snoc`).
+- `evdevKey slots c` gives the evdev code of `c`'s key. Theorems: a
+  character of the text has a key exactly when it occurs in the text
+  (`evdevKey_isSome`), and the key `k` of `c` is positive and slot `k - 1`
+  holds `c` (`evdevKey_slot`), so distinct characters get distinct keys.
+- `#assay` (`audit/Audit/Keymap.lean`): 12 mutants of `split`, `slots` and
+  `evdevKey`, all killed, no holes.
+- Outside the audit: `keysym` and `xkb_source` in Rust, which render the
+  keymap as xkb text. The unit test `keymap_names_unicode_and_control_keys`
+  and the headless sway test check that the compositor accepts it.
 
 ## Conventions
 

@@ -207,13 +207,13 @@ impl SeatInput {
         }
         let chars: Vec<char> = text.chars().collect();
         for chunk in keymap::chunks(&chars) {
-            let symbols = keymap::slots(chunk);
+            let symbols = keymap::slots(&chunk);
             let source = keymap::xkb_source(&symbols);
             let fd = keymap_fd(&source)?;
             self.keyboard
                 .keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), source.len() as u32 + 1);
             self.sync()?;
-            for c in chunk {
+            for c in &chunk {
                 let key =
                     keymap::evdev_key(&symbols, *c).ok_or_else(|| format!("no key for {c:?}"))?;
                 let time = self.time();
