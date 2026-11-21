@@ -154,7 +154,6 @@ impl Server {
         }
     }
 
-    /// Handles one JSON-RPC message and returns the response, if any.
     pub fn handle(&mut self, message: &Value) -> Option<Value> {
         let id = message.get("id")?.clone();
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
@@ -186,7 +185,6 @@ impl Server {
         })
     }
 
-    /// Serves newline-delimited JSON-RPC on the given streams until the input closes.
     pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
         for line in input.lines() {
             let line = line?;

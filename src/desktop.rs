@@ -8,15 +8,12 @@ use std::time::{Duration, Instant};
 
 use crate::input::{Button, SeatInput};
 
-/// The seat that receives the agent's input.
 pub const AGENT_SEAT: &str = "agent";
 
-/// The seat reserved for the person watching the desktop.
 pub const USER_SEAT: &str = "seat0";
 
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// A headless sway session with an agent seat and a user seat.
 pub struct Desktop {
     runtime_dir: PathBuf,
     sway: Child,
@@ -199,7 +196,6 @@ impl Desktop {
         self.input.type_text(text)
     }
 
-    /// A PNG of the whole desktop.
     pub fn screenshot(&self) -> Result<Vec<u8>, String> {
         let output = Command::new("grim")
             .args(["-t", "png", "-"])

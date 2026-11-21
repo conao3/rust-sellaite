@@ -72,19 +72,16 @@ theorem position_get (c : Char) (l : List Char) :
     · simp only [position, h, ite_false]
       cases hp : position c ss <;> simp_all
 
-/-- Every character of the text gets a key from the keymap of its slots. -/
 theorem evdevKey_isSome (text : List Char) (c : Char) :
     (evdevKey (slots text) c).isSome ↔ c ∈ text := by
   simp [evdevKey, position_isSome, slots, mem_slotsFrom]
 
-/-- The key of a character is bound to that character: slot `k - 1` holds it. -/
 theorem evdevKey_slot (text : List Char) (c : Char) :
     (evdevKey (slots text) c).all (fun k => 0 < k && (slots text)[k - 1]? == some c) := by
   have := position_get c (slots text)
   unfold evdevKey
   cases h : position c (slots text) <;> simp_all
 
-/-- A keymap binds each character to one slot. -/
 theorem slots_nodup (text : List Char) : (slots text).Nodup :=
   nodup_slotsFrom [] text List.nodup_nil
 
@@ -110,7 +107,6 @@ theorem flatten_chunksFrom (cap : Nat) (cur seen text : List Char) :
       · rw [ih]; simp
       · simp [ih]
 
-/-- Typing the pieces one after another types the whole text. -/
 theorem flatten_split (cap : Nat) (text : List Char) : (split cap text).flatten = text := by
   simp [split, flatten_chunksFrom]
 
@@ -163,7 +159,6 @@ theorem chunksFrom_spec (cap : Nat) (hcap : 0 < cap) (cs cur seen : List Char)
           refine ⟨⟨by omega, ?_⟩, h2⟩
           simp [hcs]
 
-/-- Every piece is non-empty and its keymap fits in `cap` keys. -/
 theorem split_fits (cap : Nat) (text : List Char) (hcap : 0 < cap) :
     (split cap text).all (fun p => !p.isEmpty && (slots p).length ≤ cap) := by
   have := (chunksFrom_spec cap hcap text [] [] (by simp [slots, slotsFrom]) (by simp)).1
@@ -171,7 +166,6 @@ theorem split_fits (cap : Nat) (text : List Char) (hcap : 0 < cap) :
     decide_eq_true_eq]
   exact fun p hp => this p hp
 
-/-- A piece ends only when its keymap is full and the next character is new to it. -/
 theorem split_chained (cap : Nat) (text : List Char) (hcap : 0 < cap) :
     chained cap (split cap text) = true :=
   (chunksFrom_spec cap hcap text [] [] (by simp [slots, slotsFrom]) (by simp)).2.1

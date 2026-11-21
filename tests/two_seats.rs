@@ -154,8 +154,6 @@ fn png_size(png: &[u8]) -> (u32, u32) {
     (be(&png[16..20]), be(&png[20..24]))
 }
 
-/// The agent seat clicks and types into one terminal while the user seat keeps
-/// its focus on the other one.
 #[test]
 fn agent_input_stays_on_the_agent_seat() {
     let logs = std::env::temp_dir().join(format!("sellaite-test-{}", std::process::id()));
@@ -171,7 +169,6 @@ fn agent_input_stays_on_the_agent_seat() {
         swaysock: PathBuf::from(info["Swaysock"].as_str().unwrap()),
     };
 
-    // termA maps last, so both seats start focused on it.
     let mut term_b = terminal(&info, "termB", &log_b);
     wait_for("termB", || sway.window("termB"));
     let mut term_a = terminal(&info, "termA", &log_a);
@@ -199,9 +196,13 @@ fn agent_input_stays_on_the_agent_seat() {
         id_a,
         "the agent's click moved the user seat"
     );
-    mcp.call("type", json!({"text": "agent-typed"}));
+    let many: String = (0..300u32)
+        .map(|i| char::from_u32(0x4e00 + i).unwrap())
+        .collect();
+    let text = format!("Agent-Typed: été, 日本!\t{many}\n");
+    mcp.call("type", json!({"text": text}));
     wait_for("the text in termB", || {
-        (std::fs::read_to_string(&log_b).unwrap() == "agent-typed").then_some(())
+        (std::fs::read_to_string(&log_b).unwrap() == text).then_some(())
     });
 
     assert_eq!(

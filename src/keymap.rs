@@ -73,19 +73,16 @@ leanfran::lean! {
         · simp only [position, h, ite_false]
           cases hp : position c ss <;> simp_all
 
-    /-- Every character of the text gets a key from the keymap of its slots. -/
     theorem evdevKey_isSome (text : List Char) (c : Char) :
         (evdevKey (slots text) c).isSome ↔ c ∈ text := by
       simp [evdevKey, position_isSome, slots, mem_slotsFrom]
 
-    /-- The key of a character is bound to that character: slot `k - 1` holds it. -/
     theorem evdevKey_slot (text : List Char) (c : Char) :
         (evdevKey (slots text) c).all (fun k => 0 < k && (slots text)[k - 1]? == some c) := by
       have := position_get c (slots text)
       unfold evdevKey
       cases h : position c (slots text) <;> simp_all
 
-    /-- A keymap binds each character to one slot. -/
     theorem slots_nodup (text : List Char) : (slots text).Nodup :=
       nodup_slotsFrom [] text List.nodup_nil
 
@@ -111,7 +108,6 @@ leanfran::lean! {
           · rw [ih]; simp
           · simp [ih]
 
-    /-- Typing the pieces one after another types the whole text. -/
     theorem flatten_split (cap : Nat) (text : List Char) : (split cap text).flatten = text := by
       simp [split, flatten_chunksFrom]
 
@@ -164,7 +160,6 @@ leanfran::lean! {
               refine ⟨⟨by omega, ?_⟩, h2⟩
               simp [hcs]
 
-    /-- Every piece is non-empty and its keymap fits in `cap` keys. -/
     theorem split_fits (cap : Nat) (text : List Char) (hcap : 0 < cap) :
         (split cap text).all (fun p => !p.isEmpty && (slots p).length ≤ cap) := by
       have := (chunksFrom_spec cap hcap text [] [] (by simp [slots, slotsFrom]) (by simp)).1
@@ -172,38 +167,26 @@ leanfran::lean! {
         decide_eq_true_eq]
       exact fun p hp => this p hp
 
-    /-- A piece ends only when its keymap is full and the next character is new to it. -/
     theorem split_chained (cap : Nat) (text : List Char) (hcap : 0 < cap) :
         chained cap (split cap text) = true :=
       (chunksFrom_spec cap hcap text [] [] (by simp [slots, slotsFrom]) (by simp)).2.1
     "#
 }
 
-/// The lowest xkb keycode a generated keymap assigns. xkb keycodes are evdev
-/// codes plus 8, and evdev code 0 is reserved.
 const FIRST_KEYCODE: u32 = 9;
 
-/// The highest xkb keycode the compositor accepts.
 const LAST_KEYCODE: u32 = 255;
 
-/// The most distinct characters one keymap can hold.
 pub const CAPACITY: usize = (LAST_KEYCODE - FIRST_KEYCODE + 1) as usize;
 
-/// Splits the text into consecutive pieces that each use at most
-/// [`CAPACITY`] distinct characters.
 pub fn chunks(text: &[char]) -> Vec<Vec<char>> {
     model::split(leanfran::Nat::from(CAPACITY as u64), text.to_vec())
 }
 
-/// The distinct characters of the text in order of first appearance. The
-/// character at index `i` is bound to xkb keycode `FIRST_KEYCODE + i`.
 pub fn slots(text: &[char]) -> Vec<char> {
     model::slots(text.to_vec())
 }
 
-/// The evdev key code (xkb keycode minus 8) that types `c` with the keymap
-/// built from `slots`: slot `i` has xkb keycode `FIRST_KEYCODE + i`, which is
-/// evdev code `i + 1`.
 pub fn evdev_key(slots: &[char], c: char) -> Option<u32> {
     model::evdev_key(slots.to_vec(), c)
         .map(|key| u64::try_from(key).expect("a key below the keymap capacity") as u32)
@@ -219,7 +202,6 @@ fn keysym(c: char) -> String {
     }
 }
 
-/// An xkb keymap in the text format that binds each slot to its keycode.
 pub fn xkb_source(slots: &[char]) -> String {
     let mut codes = String::new();
     let mut symbols = String::new();

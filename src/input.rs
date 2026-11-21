@@ -108,7 +108,6 @@ ignore_events!(
     ZwpVirtualKeyboardV1
 );
 
-/// A virtual pointer and keyboard attached to one named seat of a compositor.
 pub struct SeatInput {
     queue: EventQueue<State>,
     state: State,
