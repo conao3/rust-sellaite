@@ -57,20 +57,23 @@
             LEANFRAN_CLI = "${leanfran}/bin/leanfran";
             FONTCONFIG_FILE = fontsConf;
           };
-          packages.default = pkgs.rustPlatform.buildRustPackage {
-            pname = "sellaite";
-            version = "0.1.0";
-            src = ./.;
-            cargoLock.lockFile = ./Cargo.lock;
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            LEANFRAN_OFFLINE = "1";
-            nativeCheckInputs = desktopTools ++ [ pkgs.foot ];
-            FONTCONFIG_FILE = fontsConf;
-            postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools}";
-            meta = {
-              description = "A desktop and an input seat of its own for an AI computer-use agent";
-              mainProgram = "sellaite";
-              license = pkgs.lib.licenses.asl20;
+          packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            default = pkgs.rustPlatform.buildRustPackage {
+              pname = "sellaite";
+              version = "0.1.0";
+              src = ./.;
+              cargoLock.lockFile = ./Cargo.lock;
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              LEANFRAN_OFFLINE = "1";
+              nativeCheckInputs = desktopTools ++ [ pkgs.foot ];
+              FONTCONFIG_FILE = fontsConf;
+              postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools}";
+              meta = {
+                description = "A desktop and an input seat of its own for an AI computer-use agent";
+                mainProgram = "sellaite";
+                license = pkgs.lib.licenses.asl20;
+                platforms = pkgs.lib.platforms.linux;
+              };
             };
           };
         };

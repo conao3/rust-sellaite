@@ -10,17 +10,22 @@ user's cursor or focus. See `README.md` for the goal.
   leanfran, and the Wayland tools the desktop uses (`sway`, `grim`, `wayvnc`,
   `foot`; Linux only).
 - `make check` — the single verification entry point: `nix fmt -- --ci`,
-  `cargo clippy --all-targets -- -D warnings`, `cargo test`. CI runs it as
+  `cargo clippy --all-targets -- -D warnings`, the Lean proofs
+  (`lake -d lean build --wfail`), the theorem audit
+  (`lake -d audit build --wfail`), the check that `.leanfran` and `lean`
+  match the sources, and `cargo test`. CI runs it as
   `nix develop --command make check`, followed by `nix build`.
 - `make format` — format every file with treefmt (`nixfmt`, `rustfmt`).
-- `nix run` — build and run the `sellaite` binary.
+- `nix run` — build and run the `sellaite` binary. The package is Linux
+  only; on `aarch64-darwin` the flake has the devShell but no package.
 
 ## Lean and Rust
 
-- Deterministic logic (seat and desktop state transitions, input
-  validation, coordinate and geometry calculations, keymap layout) is defined
-  in Lean inside `leanfran::lean!` blocks and generated to Rust by
-  `leanfran-build` (`build.rs`). The generated sources are cached in
+- Deterministic logic is defined in Lean inside `leanfran::lean!` blocks and
+  generated to Rust by `leanfran-build` (`build.rs`). Today that is the
+  keymap layout of `type` (`src/keymap.rs`); seat and desktop state
+  transitions, input validation and geometry go to Lean as they grow beyond
+  the single bounds check in `SeatInput::click`. The generated sources are cached in
   `.leanfran/cache/` and the Lean package in `lean/`; commit both. The Nix
   build sets `LEANFRAN_OFFLINE=1` and uses the cache only.
 - Rust owns process management (sway, wayvnc), the Wayland protocol clients
@@ -63,7 +68,8 @@ key. Rust calls `split`, `slots` and `evdevKey`.
 - Edition 2024; `rustfmt.toml` pins `style_edition = "2024"`.
 - The CLI follows the AWS CLI grammar: `sellaite <command> <subcommand>
   --kebab-case-parameter value`, no positional arguments, JSON output by
-  default with PascalCase keys.
+  default with PascalCase keys. Exit codes: 0 on success, 252 for a usage
+  error, 255 for any other failure.
 - Commit messages, comments, test names and documentation are in English.
 - `.github/workflows/actions.lock` pins every action. Regenerate it with
   `gh actions-lock --no-interactive` in the same commit as any `uses:` change,

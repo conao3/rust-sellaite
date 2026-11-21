@@ -27,8 +27,15 @@ enum McpCommand {
     Serve,
 }
 
+const EXIT_USAGE: i32 = 252;
+const EXIT_FAILURE: i32 = 255;
+
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|e| {
+        let code = if e.use_stderr() { EXIT_USAGE } else { 0 };
+        let _ = e.print();
+        std::process::exit(code);
+    });
     match cli.command {
         Command::Mcp {
             command: McpCommand::Serve,
@@ -37,7 +44,7 @@ fn main() {
             let stdout = std::io::stdout().lock();
             if let Err(e) = mcp::Server::default().serve(stdin, stdout) {
                 eprintln!("sellaite: {e}");
-                std::process::exit(1);
+                std::process::exit(EXIT_FAILURE);
             }
         }
     }

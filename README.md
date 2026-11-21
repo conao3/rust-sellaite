@@ -48,7 +48,7 @@ XDG_RUNTIME_DIR=<XdgRuntimeDir> WAYLAND_DISPLAY=<WaylandDisplay> foot &
 
 ```sh
 nix develop      # Rust, Lean, leanfran, sway, grim, wayvnc
-make check       # format check, clippy, tests (including a headless sway test)
+make check       # format check, clippy, Lean proofs and audit, tests (including a headless sway test)
 nix build        # build the sellaite binary
 nix run          # run it
 ```
