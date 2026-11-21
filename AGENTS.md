@@ -50,8 +50,10 @@ key. Rust calls `split`, `slots` and `evdevKey`.
   character of the text has a key exactly when it occurs in the text
   (`evdevKey_isSome`), and the key `k` of `c` is positive and slot `k - 1`
   holds `c` (`evdevKey_slot`), so distinct characters get distinct keys.
-- `#assay` (`audit/Audit/Keymap.lean`): 12 mutants of `split`, `slots` and
-  `evdevKey`, all killed, no holes.
+- `#assay` (`audit/Audit/Keymap.lean`) on `split`, its worker `chunksFrom`,
+  `slots` and `evdevKey`: 26 mutants, 24 killed, no holes, 1 stillborn, and
+  1 untested (`seen ++ [c]` turned into `[c] ++ seen`, which `chunksFrom`
+  only reads by membership and length, so the output is the same).
 - Outside the audit: `keysym` and `xkb_source` in Rust, which render the
   keymap as xkb text. The unit test `keymap_names_unicode_and_control_keys`
   and the headless sway test check that the compositor accepts it.
