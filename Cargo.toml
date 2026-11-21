@@ -1,0 +1,10 @@
+[package]
+name = "sellaite"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "A desktop and an input seat of its own for an AI computer-use agent"
+repository = "https://github.com/conao3/rust-sellaite"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }

@@ -12,6 +12,15 @@ The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
 Early development. Nothing is usable yet.
 
+## Development
+
+```sh
+nix develop      # Rust, Lean, leanfran, sway, grim, wayvnc
+make check       # format check, clippy, tests
+nix build        # build the sellaite binary
+nix run          # run it
+```
+
 ## License
 
 Apache-2.0
