@@ -7,4 +7,11 @@ description = "A desktop and an input seat of its own for an AI computer-use age
 repository = "https://github.com/conao3/rust-sellaite"
 
 [dependencies]
+base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

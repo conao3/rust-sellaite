@@ -24,6 +24,11 @@
         { pkgs, system, ... }:
         let
           leanfran = inputs.leanfran.packages.${system}.rust-compiler;
+          desktopTools = [
+            pkgs.sway-unwrapped
+            pkgs.grim
+          ];
+          fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
         in
         {
           treefmt = {
@@ -42,19 +47,25 @@
               pkgs.gnumake
               leanfran
             ]
-            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-              pkgs.sway
-              pkgs.grim
-              pkgs.wayvnc
-              pkgs.foot
-            ];
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
+              desktopTools
+              ++ [
+                pkgs.wayvnc
+                pkgs.foot
+              ]
+            );
             LEANFRAN_CLI = "${leanfran}/bin/leanfran";
+            FONTCONFIG_FILE = fontsConf;
           };
           packages.default = pkgs.rustPlatform.buildRustPackage {
             pname = "sellaite";
             version = "0.1.0";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            nativeCheckInputs = desktopTools ++ [ pkgs.foot ];
+            FONTCONFIG_FILE = fontsConf;
+            postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools}";
             meta = {
               description = "A desktop and an input seat of its own for an AI computer-use agent";
               mainProgram = "sellaite";

@@ -10,13 +10,45 @@ The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
 ## Status
 
-Early development. Nothing is usable yet.
+Early development. The MCP server runs one desktop with an agent seat and a user seat; the browser view and the ways to step in are not built yet.
+
+## Usage
+
+sellaite runs on Linux and needs `sway` and `grim` on `PATH` (the Nix package brings both). Start the MCP server over stdio:
+
+```sh
+nix run github:conao3/rust-sellaite -- mcp serve
+```
+
+Register it with an MCP client, for example Claude Code:
+
+```sh
+claude mcp add sellaite -- nix run github:conao3/rust-sellaite -- mcp serve
+```
+
+Tools:
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with two seats: `agent` for the agent and `seat0` for you. Returns `XdgRuntimeDir`, `WaylandDisplay` and `Swaysock`. |
+| `stop_desktop` | | Stops sway and every application in the desktop. |
+| `screenshot` | | Returns the whole desktop as a PNG image. |
+| `click` | `x`, `y`, `button` (`left`, `right`, `middle`) | Moves the agent's pointer and clicks. |
+| `type` | `text` | Types the text into the window that has the agent's keyboard focus. |
+
+The agent's clicks and keystrokes come from a virtual pointer and a virtual keyboard created on the `agent` seat, so they move only that seat's cursor and focus. Your seat keeps its own focus.
+
+To open an application in the desktop, run it with the environment that `start_desktop` returned:
+
+```sh
+XDG_RUNTIME_DIR=<XdgRuntimeDir> WAYLAND_DISPLAY=<WaylandDisplay> foot &
+```
 
 ## Development
 
 ```sh
 nix develop      # Rust, Lean, leanfran, sway, grim, wayvnc
-make check       # format check, clippy, tests
+make check       # format check, clippy, tests (including a headless sway test)
 nix build        # build the sellaite binary
 nix run          # run it
 ```

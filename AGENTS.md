@@ -46,3 +46,10 @@ user's cursor or focus. See `README.md` for the goal.
 - Put `XDG_RUNTIME_DIR` under a short path (`mktemp -d /tmp/sel.XXXX`): the
   Wayland socket path is limited to 108 bytes and sway fails to start with a
   long runtime directory.
+- `tests/two_seats.rs` drives the real path: it starts `sellaite mcp serve`,
+  opens two `foot` terminals in the desktop, clicks and types through MCP, and
+  checks with `swaymsg -t get_seats` that `seat0` keeps its focus. `nix build`
+  runs it in the sandbox, so `nativeCheckInputs` carries `sway-unwrapped`,
+  `grim` and `foot`, and `FONTCONFIG_FILE` points at a fixed font set.
+- The flake uses `sway-unwrapped`: the nixpkgs `sway` wrapper starts
+  `dbus-run-session`, which fails where no D-Bus daemon is installed.
