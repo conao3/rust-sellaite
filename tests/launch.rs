@@ -1,7 +1,9 @@
 mod common;
 
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -190,9 +192,98 @@ fn launch_opens_a_focused_window_and_stop_desktop_ends_every_launched_process() 
 #[test]
 fn wait_sleeps_and_refuses_long_waits() {
     let mut mcp = Mcp::spawn();
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     mcp.call("wait", json!({"milliseconds": 200}));
-    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+    assert!(started.elapsed() >= Duration::from_millis(200));
     let message = error_text(&mut mcp, "wait", json!({"milliseconds": 30_001}));
     assert!(message.contains("at most 30000"), "{message}");
+}
+
+fn assert_signal_cleanup(signal: libc::c_int) {
+    let mut mcp = Mcp::spawn();
+    let info = mcp.call("start_desktop", json!({}))["structuredContent"].clone();
+    let id = info["Id"].as_str().unwrap();
+    let dir = Path::new(info["XdgRuntimeDir"].as_str().unwrap());
+    let parent = mcp.call(
+        "launch",
+        json!({"argv": ["sh", "-c", "(sleep 600 &); exec sleep 601"]}),
+    )["structuredContent"]["Pid"]
+        .as_u64()
+        .unwrap() as u32;
+    let before = wait_for("the orphaned sleep and its marked launcher", || {
+        let pids = marked(id);
+        (pids.len() == 2 && pids.contains(&parent)).then_some(pids)
+    });
+
+    assert_eq!(mcp.signal_and_wait(signal).signal(), Some(signal));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (left, dir_exists) = loop {
+        let left = marked(id);
+        let dir_exists = dir.exists();
+        if (left.is_empty() && !dir_exists) || std::time::Instant::now() >= deadline {
+            break (left, dir_exists);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    for &pid in &left {
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
+    if dir_exists {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    assert!(
+        left.is_empty() && !dir_exists,
+        "signal {signal}: marked PIDs before {before:?}, after {left:?}; runtime directory still exists: {dir_exists}"
+    );
+}
+
+#[test]
+fn sigterm_cleans_up_the_desktop() {
+    assert_signal_cleanup(libc::SIGTERM);
+}
+
+#[test]
+fn sigkill_cleans_up_the_desktop() {
+    assert_signal_cleanup(libc::SIGKILL);
+}
+
+#[test]
+fn mcp_startup_cleans_up_marked_processes_from_a_stale_desktop() {
+    let dir = tempfile::Builder::new()
+        .prefix("sel.")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let id = dir.path().file_name().unwrap().to_str().unwrap();
+    let id = id.strip_prefix("sel.").unwrap();
+    let mut process = Command::new("sleep")
+        .arg("600")
+        .env("SELLAITE_DESKTOP", id)
+        .spawn()
+        .unwrap();
+    assert_eq!(marked(id), [process.id()]);
+    std::fs::write(
+        dir.path().join("sellaite.json"),
+        json!({"Pid": 0, "Width": 640, "Height": 480, "WaylandDisplay": "wayland-1"}).to_string(),
+    )
+    .unwrap();
+
+    let _mcp = Mcp::spawn();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        let status = process.try_wait().unwrap();
+        if (status.is_some() && !dir.path().exists()) || Instant::now() >= deadline {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if status.is_none() {
+        process.kill().unwrap();
+        process.wait().unwrap();
+    }
+    assert_eq!(
+        status.and_then(|status| status.signal()),
+        Some(libc::SIGKILL)
+    );
+    assert!(marked(id).is_empty());
+    assert!(!dir.path().exists());
 }

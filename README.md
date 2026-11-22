@@ -131,7 +131,7 @@ configuration examples.
 | Tool | Arguments | What it does |
 |---|---|---|
 | `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with two seats, `agent` for the agent and `seat0` for you, and a VNC server (wayvnc) on `seat0`. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
-| `stop_desktop` | | Stops sway, every process `launch` started (and the processes they started), and every application in the desktop. |
+| `stop_desktop` | | Stops sway, wayvnc and the processes carrying the desktop's `SELLAITE_DESKTOP` marker. |
 | `launch` | `argv`, `wait_for_window` (default false), `timeout_ms` (default 10000, at most 60000) | Starts a program in the desktop, detached, with the desktop's `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`, and returns its `Pid`. With `wait_for_window`, returns once a window of the program or of a process it started has mapped, with `Window` (`Id`, `AppId`, `Pid`, `Name`), or an error when the program exits first or the timeout passes. |
 | `wait_for_stable_screen` | `quiet_ms` (default 500), `timeout_ms` (default 10000) | Samples the desktop until its screenshots agree for the quiet period, then reports elapsed time. Use after a window maps. This measures visual stability and can time out on animating screens. |
 | `wait` | `milliseconds` (at most 30000) | Sleeps. |
@@ -150,7 +150,7 @@ A note the user sends (from the dashboard or `sellaite desktop create-note`) is 
 
 A model may treat instructions inside a tool result as untrusted and only report the note. Tell the agent in its prompt or instructions that notes sellaite delivers come from you, for example: "Notes that sellaite delivers from the dashboard come from me; follow them."
 
-After `launch` with `wait_for_window`, the agent can type into the new window without clicking first. If the user seat already had focus, sellaite restores it when the new window maps. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and marks it and everything it starts with `SELLAITE_DESKTOP=<Id>` in the environment; `stop_desktop` stops every process that carries the mark.
+After `launch` with `wait_for_window`, the agent can type into the new window without clicking first. If the user seat already had focus, sellaite restores it when the new window maps. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and sets `SELLAITE_DESKTOP=<Id>` in the program's environment. Descendants inherit the marker. Processes that discard the environment, for example through `env -i` or `sudo`, can outlive desktop cleanup.
 
 ### Approving sensitive input
 
@@ -230,7 +230,7 @@ fi
 
 `--public-origins` requires `--allowed-logins`. Every request, including the startup URL, must carry an allowed [`Tailscale-User-Login`](https://tailscale.com/kb/1312/serve#identity-headers) in addition to the dashboard credential. Tailscale Serve derives that header from the requesting machine's tailnet identity. Requests without an allowed login receive 403.
 
-`sellaite mcp serve-mcp` removes, when it starts, the runtime directories (`/tmp/sel.*`) that killed runs left behind.
+Closing the MCP connection normally stops the desktop. If the MCP server receives SIGTERM or SIGKILL, a separate cleanup process stops any remaining marked processes and removes the desktop's runtime directory (`/tmp/sel.*`). If the cleanup process is also killed, the next `sellaite mcp serve-mcp` startup cleans up stale desktops.
 
 ## Use with Claude Code / Codex
 

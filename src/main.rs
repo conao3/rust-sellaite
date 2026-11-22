@@ -166,6 +166,8 @@ enum McpCommand {
     /// Serve MCP over stdio
     #[command(alias = "serve")]
     ServeMcp,
+    #[command(hide = true)]
+    ReapDesktop,
 }
 
 const EXIT_USAGE: i32 = 252;
@@ -291,6 +293,14 @@ fn main() {
             let stdin = std::io::stdin().lock();
             let stdout = std::io::stdout().lock();
             if let Err(e) = mcp::Server::default().serve(stdin, stdout) {
+                eprintln!("sellaite: {e}");
+                std::process::exit(EXIT_FAILURE);
+            }
+        }
+        Command::Mcp {
+            command: McpCommand::ReapDesktop,
+        } => {
+            if let Err(e) = runtime::reap_desktop() {
                 eprintln!("sellaite: {e}");
                 std::process::exit(EXIT_FAILURE);
             }

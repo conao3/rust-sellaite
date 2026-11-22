@@ -31,6 +31,7 @@ pub struct Desktop {
     height: u32,
     input: SeatInput,
     launched: Vec<Child>,
+    _cleanup: runtime::Cleanup,
 }
 
 pub struct Launched {
@@ -74,10 +75,13 @@ fn log_tail(path: &Path) -> String {
 }
 
 fn spawn_child(command: &mut Command, what: &str) -> Result<Child, String> {
+    let parent = std::process::id() as libc::pid_t;
     unsafe {
-        command.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-            if libc::getppid() == 1 {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
                 libc::_exit(1);
             }
             Ok(())
@@ -114,16 +118,17 @@ impl Desktop {
         if width == 0 || height == 0 {
             return Err("width and height must be positive".to_string());
         }
-        let runtime_dir = runtime::make_dir()?;
-        let started = runtime::write_state(&runtime_dir, &runtime_state(width, height, None))
-            .and_then(|()| Self::start_in(runtime_dir.clone(), width, height));
-        if started.is_err() {
-            let _ = fs::remove_dir_all(&runtime_dir);
-        }
-        started
+        let (cleanup, runtime_dir) = runtime::Cleanup::start()?;
+        runtime::write_state(&runtime_dir, &runtime_state(width, height, None))?;
+        Self::start_in(runtime_dir, width, height, cleanup)
     }
 
-    fn start_in(runtime_dir: PathBuf, width: u32, height: u32) -> Result<Self, String> {
+    fn start_in(
+        runtime_dir: PathBuf,
+        width: u32,
+        height: u32,
+        cleanup: runtime::Cleanup,
+    ) -> Result<Self, String> {
         let config = runtime_dir.join("sway.config");
         fs::write(&config, sway_config(width, height)).map_err(|e| e.to_string())?;
         let log_path = runtime_dir.join("sway.log");
@@ -186,6 +191,7 @@ impl Desktop {
             height,
             input,
             launched: Vec::new(),
+            _cleanup: cleanup,
         };
         desktop.watch_user_seat()?;
         runtime::write_state(
@@ -459,6 +465,5 @@ impl Drop for Desktop {
             stop_child(wayvnc);
         }
         stop_child(&mut self.sway);
-        let _ = fs::remove_dir_all(&self.runtime_dir);
     }
 }

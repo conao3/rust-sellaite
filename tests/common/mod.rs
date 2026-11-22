@@ -79,6 +79,15 @@ impl Mcp {
         assert_ne!(result["isError"], true, "{tool} failed: {result}");
         result
     }
+
+    #[allow(dead_code)]
+    pub fn signal_and_wait(&mut self, signal: libc::c_int) -> std::process::ExitStatus {
+        assert_eq!(
+            unsafe { libc::kill(self.child.id() as libc::pid_t, signal) },
+            0
+        );
+        wait_for("the MCP server to exit", || self.child.try_wait().unwrap())
+    }
 }
 
 impl Drop for Mcp {

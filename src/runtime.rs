@@ -1,13 +1,18 @@
 use std::ffi::CString;
 use std::fs;
+use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
+
+use crate::launch;
 
 const PREFIX: &str = "sel.";
 
@@ -24,6 +29,75 @@ pub const MAX_NOTE_CHARS: usize = 2000;
 pub const VNC_SOCKET: &str = "vnc.sock";
 
 const STARTING_GRACE: Duration = Duration::from_secs(60);
+
+const REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub struct Cleanup(Child);
+
+impl Cleanup {
+    pub fn start() -> Result<(Self, PathBuf), String> {
+        let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+        command
+            .args(["mcp", "reap-desktop"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("cannot start desktop cleanup: {e}"))?;
+        let stdout = child.stdout.take().unwrap();
+        let cleanup = Self(child);
+        let mut line = String::new();
+        BufReader::new(stdout)
+            .read_line(&mut line)
+            .map_err(|e| format!("cannot read desktop runtime directory: {e}"))?;
+        let dir = PathBuf::from(line.trim_end_matches('\n'));
+        if dir.parent() != Some(temp_root().as_path()) || !id_of(&dir).is_some_and(is_id) {
+            return Err("desktop cleanup did not provide a runtime directory".into());
+        }
+        Ok((cleanup, dir))
+    }
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        drop(self.0.stdin.take());
+        let _ = self.0.wait();
+    }
+}
+
+pub fn reap_desktop() -> Result<(), String> {
+    let dir = make_dir()?;
+    let lock = fs::File::open(&dir).and_then(|lock| {
+        lock.lock()?;
+        Ok(lock)
+    });
+    let _lock = lock
+        .inspect_err(|_| {
+            let _ = fs::remove_dir(&dir);
+        })
+        .map_err(|e| format!("cannot lock {}: {e}", dir.display()))?;
+    let watch = (|| {
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "{}", dir.display())?;
+        stdout.flush()?;
+        drop(stdout);
+        io::copy(&mut io::stdin().lock(), &mut io::sink())?;
+        Ok::<(), io::Error>(())
+    })();
+    reap_dir(&dir)?;
+    match watch {
+        Err(e) if e.kind() != io::ErrorKind::BrokenPipe => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
@@ -256,8 +330,41 @@ pub fn remove_stale() -> Vec<PathBuf> {
     owned_dirs()
         .into_iter()
         .filter(|dir| !is_live(dir))
-        .filter(|dir| fs::remove_dir_all(dir).is_ok())
+        .filter(|dir| {
+            let Ok(lock) = fs::File::open(dir) else {
+                return false;
+            };
+            lock.try_lock().is_ok() && !is_live(dir) && reap_dir(dir).is_ok()
+        })
         .collect()
+}
+
+fn reap_dir(dir: &Path) -> Result<(), String> {
+    let id = id_of(dir).ok_or_else(|| format!("invalid runtime directory {}", dir.display()))?;
+    let deadline = Instant::now() + REAP_TIMEOUT;
+    let mut empty = false;
+    loop {
+        let left = launch::marked(id);
+        if left.is_empty() && empty {
+            break;
+        }
+        empty = left.is_empty();
+        if !empty && Instant::now() >= deadline {
+            return Err(format!(
+                "marked processes remain for desktop {id}: {left:?}"
+            ));
+        }
+        if !empty {
+            launch::signal(&left, libc::SIGKILL);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    match fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => {
+            Err(format!("cannot remove {}: {e}", dir.display()))
+        }
+        _ => Ok(()),
+    }
 }
 
 pub fn live_desktops() -> Vec<(String, PathBuf, State)> {
