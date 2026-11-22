@@ -57,6 +57,8 @@ struct Approval {
 #[derive(Serialize, Deserialize, SimpleObject)]
 #[serde(rename_all = "PascalCase")]
 struct Target {
+    application: String,
+    window: String,
     role: String,
     name: String,
 }

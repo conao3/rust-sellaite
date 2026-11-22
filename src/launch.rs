@@ -104,14 +104,14 @@ impl WindowEvents {
 }
 
 pub fn user_focus(swaysock: &Path) -> Result<Option<u64>, String> {
+    seat_focus(swaysock, crate::desktop::USER_SEAT)
+}
+
+pub fn seat_focus(swaysock: &Path, name: &str) -> Result<Option<u64>, String> {
     let seats = swaymsg(swaysock, &["-t", "get_seats"])?;
     Ok(seats
         .as_array()
-        .and_then(|seats| {
-            seats
-                .iter()
-                .find(|seat| seat["name"] == crate::desktop::USER_SEAT)
-        })
+        .and_then(|seats| seats.iter().find(|seat| seat["name"] == name))
         .and_then(|seat| seat["focus"].as_u64())
         .filter(|&id| id != 0))
 }
@@ -132,7 +132,7 @@ pub fn restore_user_focus(
     Ok(())
 }
 
-fn swaymsg(swaysock: &Path, args: &[&str]) -> Result<Value, String> {
+pub fn swaymsg(swaysock: &Path, args: &[&str]) -> Result<Value, String> {
     let output = std::process::Command::new("swaymsg")
         .args(["-r", "-s"])
         .arg(swaysock)

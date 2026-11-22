@@ -2,6 +2,7 @@ mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -120,7 +121,7 @@ impl Dashboard {
     }
 
     fn desktop(&self, id: &str) -> Option<Value> {
-        let (status, list) = self.graphql(&self.origin(), "{ desktops { Id: id Paused: paused PausedReason: pausedReason UserSeatIdle: userSeatIdle TakingOver: takingOver PendingNotes: pendingNotes PendingApproval: pendingApproval { Id: id Tool: tool } } }", json!({}));
+        let (status, list) = self.graphql(&self.origin(), "{ desktops { Id: id Paused: paused PausedReason: pausedReason UserSeatIdle: userSeatIdle TakingOver: takingOver PendingNotes: pendingNotes PendingApproval: pendingApproval { Id: id Tool: tool Target: target { Application: application Window: window Role: role Name: name } Bounds: bounds { X: x Y: y Width: width Height: height } } } }", json!({}));
         assert_eq!(status, 200);
         list["data"]["desktops"]
             .as_array()
@@ -591,11 +592,44 @@ fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
 
 #[test]
 fn risky_input_waits_for_the_matching_dashboard_decision() {
-    let mut mcp = Mcp::spawn();
+    let fixture = tempfile::tempdir().unwrap();
+    let probe = fixture.path().join("timeout");
+    std::fs::write(&probe, "#!/bin/sh\ncat \"$APPROVAL_TEST_TARGET\"\n").unwrap();
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = format!(
+        "{}:{}",
+        fixture.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let target = fixture.path().join("target.json");
+    let element = json!({
+        "Role": "text", "Name": "Sample",
+        "Bounds": {"X": 40, "Y": 40, "Width": 100, "Height": 100},
+    });
+    std::fs::write(&target, element.to_string()).unwrap();
+    let mut mcp = Mcp::spawn_with_env([
+        ("PATH", path.as_str()),
+        ("APPROVAL_TEST_TARGET", target.to_str().unwrap()),
+        ("SELLAITE_ATSPI_LIBRARY", "fixture"),
+    ]);
     let desktop = mcp.call("start_desktop", json!({}));
     let id = desktop["structuredContent"]["Id"].as_str().unwrap();
     let dashboard = Dashboard::spawn();
     let origin = dashboard.origin();
+    let unresolved = mcp.request(
+        "tools/call",
+        json!({"name": "click", "arguments": {"x": 42, "y": 50, "intent": "send"}}),
+    );
+    assert!(is_error(&unresolved), "{unresolved}");
+    assert!(dashboard.desktop(id).unwrap()["PendingApproval"].is_null());
+    mcp.call(
+        "launch",
+        json!({
+            "argv": ["foot", "--title=Approval fixture", "sh", "-c", "printf '\\033[?25l'; exec sleep 60"],
+            "wait_for_window": true,
+        }),
+    );
+    mcp.call("wait_for_stable_screen", json!({}));
     let allowed = mcp.call(
         "click",
         json!({
@@ -627,6 +661,10 @@ fn risky_input_waits_for_the_matching_dashboard_decision() {
             approval.is_object().then_some(approval)
         });
         assert_eq!(pending["Tool"], "click");
+        assert_eq!(pending["Target"]["Application"], "foot");
+        assert_eq!(pending["Target"]["Window"], "Approval fixture");
+        assert_eq!(pending["Target"]["Name"], "Sample");
+        assert_eq!(pending["Bounds"], element["Bounds"]);
         let request_id = pending["Id"].as_str().unwrap();
         assert_eq!(
             dashboard
@@ -664,5 +702,44 @@ fn risky_input_waits_for_the_matching_dashboard_decision() {
         mcp.read_result(request)["content"][0]["text"],
         "typed 6 characters"
     );
+
+    for (tool, arguments, field, new_value) in [
+        (
+            "click",
+            json!({"x": 42, "y": 50, "intent": "send"}),
+            "Name",
+            json!("Different"),
+        ),
+        (
+            "type",
+            json!({"text": "fixture", "intent": "password"}),
+            "Bounds",
+            json!({"X": 41, "Y": 40, "Width": 100, "Height": 100}),
+        ),
+    ] {
+        std::fs::write(&target, element.to_string()).unwrap();
+        let request = mcp.send_request("tools/call", json!({"name": tool, "arguments": arguments}));
+        let pending = wait_for("approval for the original target", || {
+            let approval = dashboard.desktop(id)?["PendingApproval"].clone();
+            approval.is_object().then_some(approval)
+        });
+        let mut changed = element.clone();
+        changed[field] = new_value;
+        std::fs::write(&target, changed.to_string()).unwrap();
+        let (_, result) = dashboard.decide(
+            id,
+            pending["Id"].as_str().unwrap(),
+            &origin,
+            &json!({"Action": "approve"}),
+        );
+        assert_eq!(result["data"]["decideApproval"], true, "{result}");
+        let discarded = mcp.read_result(request);
+        assert!(is_error(&discarded), "{discarded}");
+        assert_eq!(
+            discarded["content"][0]["text"],
+            "input target changed during approval; take a new screenshot"
+        );
+        assert!(dashboard.desktop(id).unwrap()["PendingApproval"].is_null());
+    }
     mcp.call("stop_desktop", json!({}));
 }

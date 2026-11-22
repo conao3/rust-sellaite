@@ -343,7 +343,8 @@ function renderApproval(desktop) {
   const canvas = $("screen").querySelector("canvas");
   box.hidden = !(request && canvas);
   if (!request) return;
-  const target = [request.Target.Role, request.Target.Name, request.Domain].filter(Boolean);
+  const target = [request.Target.Application, request.Target.Window, request.Target.Role,
+    request.Target.Name, request.Domain].filter(Boolean);
   $("approval-label").textContent = [`${request.Tool}: ${request.Reason}`, ...target].join(" · ");
   for (const button of ["approve", "edit-approval", "reject"]) $(button).disabled = busy;
   if (canvas) {
@@ -362,7 +363,7 @@ const desktopFields = `
   PausedReason: pausedReason UserSeatIdle: userSeatIdle PendingNotes: pendingNotes
   PendingApproval: pendingApproval {
     Id: id Tool: tool Reason: reason Domain: domain X: x Y: y
-    Target: target { Role: role Name: name }
+    Target: target { Application: application Window: window Role: role Name: name }
     Bounds: bounds { X: x Y: y Width: width Height: height }
   }
 `;

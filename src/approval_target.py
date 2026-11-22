@@ -37,6 +37,9 @@ contains = bind("state_set_contains", integer, ptr, integer)
 component = bind("accessible_get_component_iface", ptr, ptr)
 extents = bind("component_get_extents", C.POINTER(Rect), ptr, integer, ptr)
 hit = bind("component_get_accessible_at_point", ptr, ptr, integer, integer, integer, ptr)
+FOCUSED = 12
+SHOWING = 25
+VISIBLE = 30
 
 
 def children(node):
@@ -46,37 +49,65 @@ def children(node):
             yield item
 
 
-def focused(app):
-    todo = [app]
+def showing(node):
+    state = states(node)
+    return state and all(contains(state, flag) for flag in (SHOWING, VISIBLE))
+
+
+def focused(window):
+    todo = list(children(window))
     while todo:
         node = todo.pop()
         state = states(node)
-        if state and contains(state, 12):  # ATSPI_STATE_FOCUSED
+        if state and contains(state, FOCUSED) and showing(node):
             yield node
         todo.extend(children(node))
 
 
-def at_point(app, x, y):
-    for window in children(app):
-        node = window
-        while node and (comp := component(node)):
-            nested = hit(comp, x, y, 0, None)  # ATSPI_COORD_TYPE_SCREEN
-            if not nested or nested == node:
-                break
-            node = nested
-        if node != window:
-            yield node
+def hit_target(node, x, y):
+    result = None
+    while comp := component(node):
+        nested = hit(comp, x, y, 0, None)  # ATSPI_COORD_TYPE_SCREEN
+        if not nested or not showing(nested):
+            break
+        result = nested
+        if nested == node:
+            break
+        node = nested
+    return result
+
+
+def at_point(window, x, y):
+    node = hit_target(window, x, y)
+    if node and node != window:
+        return {node}
+    return {
+        node for child in children(window)
+        if showing(child) and (node := hit_target(child, x, y))
+    }
+
+
+def label(node):
+    return (name(node, None) or b"").decode("utf-8", "replace")
 
 
 def target(node):
     result = {
         "Role": (role(node, None) or b"").decode("utf-8", "replace"),
-        "Name": (name(node, None) or b"").decode("utf-8", "replace"),
+        "Name": label(node),
     }
     comp = component(node)
     rect = extents(comp, 0, None) if comp else None
-    if rect and rect.contents.Width > 0 and rect.contents.Height > 0:
-        result["Bounds"] = {field: getattr(rect.contents, field) for field, _ in Rect._fields_}
+    if rect:
+        r = rect.contents
+        if r.Width > 0 and r.Height > 0 and (
+            (r.X <= point[0] < r.X + r.Width and r.Y <= point[1] < r.Y + r.Height)
+            if point else (
+                r.X < box["x"] + box["width"] and box["x"] < r.X + r.Width
+                and r.Y < box["y"] + box["height"] and box["y"] < r.Y + r.Height
+            )
+        ):
+            result["Bounds"] = {field: getattr(r, field) for field, _ in Rect._fields_}
     return result
 
 
@@ -87,13 +118,18 @@ if not root:
     sys.exit(1)
 marker = ("SELLAITE_DESKTOP=" + sys.argv[1]).encode()
 point = [int(value) for value in sys.argv[2].split(",")] if sys.argv[2] else None
-targets = []
-for app in children(root):
-    try:
-        environ = Path(f"/proc/{pid(app, None)}/environ").read_bytes().split(b"\0")
-    except OSError:
-        continue
-    if marker not in environ:
-        continue
-    targets.extend(map(target, at_point(app, *point) if point else focused(app)))
-print(json.dumps(targets[0] if len(targets) == 1 else None))
+owner, title = int(sys.argv[3]), sys.argv[4]
+box = json.loads(sys.argv[5])
+try:
+    environ = Path(f"/proc/{owner}/environ").read_bytes().split(b"\0")
+except OSError:
+    environ = []
+windows = [
+    window
+    for app in children(root) if pid(app, None) == owner
+    for window in children(app) if label(window) == title
+] if marker in environ else []
+nodes = []
+if len(windows) == 1 and showing(window := windows[0]):
+    nodes = list(at_point(window, *point) if point else focused(window))
+print(json.dumps(target(nodes[0]) if len(nodes) == 1 else None))

@@ -2,12 +2,37 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::desktop::Desktop;
+use crate::desktop::{AGENT_SEAT, Desktop};
+use crate::launch::{seat_focus, swaymsg};
 
 const PENDING: &str = "approval.json";
 const TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+struct Element {
+    role: String,
+    name: String,
+    bounds: Option<Value>,
+}
+
+#[derive(PartialEq)]
+struct Target {
+    window: Window,
+    element: Element,
+}
+
+#[derive(Deserialize, PartialEq)]
+struct Window {
+    id: u64,
+    pid: u32,
+    app_id: String,
+    name: String,
+    rect: Value,
+}
 
 pub fn pending(dir: &Path) -> Option<Value> {
     serde_json::from_slice(&fs::read(dir.join(PENDING)).ok()?).ok()
@@ -64,8 +89,10 @@ pub fn check(
         .unwrap_or("ordinary");
     let domain = args["domain"].as_str().unwrap_or("");
     let target = accessibility(desktop, point)?;
-    let role = target["Role"].as_str().unwrap_or("");
-    let name = target["Name"].as_str().unwrap_or("");
+    let (role, name) = target
+        .as_ref()
+        .map(|target| (target.element.role.as_str(), target.element.name.as_str()))
+        .unwrap_or_default();
     let reason = match intent {
         "send" | "submit" | "purchase" | "password" => intent,
         "navigate" if !allowed_domain(domain) => "navigation outside the allow list",
@@ -76,6 +103,9 @@ pub fn check(
         "ordinary" | "navigate" => return Ok(Value::Null),
         _ => return Err("unknown action intent".into()),
     };
+    let target = target.filter(|target| target.element.bounds.is_some()).ok_or(
+        "approval requires a unique accessible target in a visible window; take a new screenshot",
+    )?;
     let info = desktop.info();
     let dir = &info.runtime_dir;
     let id = format!(
@@ -85,17 +115,16 @@ pub fn check(
             .map_err(|e| e.to_string())?
             .as_nanos()
     );
-    let bounds = match point {
-        Some((x, y)) => {
-            json!({"X": x.saturating_sub(12), "Y": y.saturating_sub(12), "Width": 24, "Height": 24})
-        }
-        None => json!({"X": 0, "Y": 0, "Width": info.width, "Height": info.height}),
-    };
     let request = json!({
         "Id": id, "Tool": tool, "Reason": reason,
         "Domain": if intent == "navigate" { Some(domain) } else { None },
-        "Target": {"Role": role, "Name": name},
-        "Bounds": target.get("Bounds").unwrap_or(&bounds),
+        "Target": {
+            "Application": target.window.app_id,
+            "Window": target.window.name,
+            "Role": target.element.role,
+            "Name": target.element.name,
+        },
+        "Bounds": target.element.bounds,
         "X": point.map(|(x, _)| x), "Y": point.map(|(_, y)| y),
     });
     let screen = desktop.screenshot()?;
@@ -126,7 +155,21 @@ pub fn check(
     if decision["Action"] == "reject" {
         return Err("the user rejected the action".into());
     }
-    if desktop.screenshot()? != screen || desktop.paused().is_some() {
+    if desktop.screenshot()? != screen {
+        return Err("desktop changed during approval; take a new screenshot".into());
+    }
+    let approved_point = if point.is_some() && decision["Action"] == "edit" {
+        Some((
+            crate::mcp::coord_from(&decision, "X")?,
+            crate::mcp::coord_from(&decision, "Y")?,
+        ))
+    } else {
+        point
+    };
+    if accessibility(desktop, approved_point)? != Some(target) {
+        return Err("input target changed during approval; take a new screenshot".into());
+    }
+    if desktop.paused().is_some() {
         return Err("desktop changed during approval; take a new screenshot".into());
     }
     Ok(decision)
@@ -153,11 +196,55 @@ fn risky_button(role: &str, name: &str) -> bool {
         })
 }
 
-fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Value, String> {
+fn visible_windows(tree: &Value) -> impl Iterator<Item = &Value> {
+    let mut todo = vec![tree];
+    std::iter::from_fn(move || {
+        while let Some(node) = todo.pop() {
+            for key in ["nodes", "floating_nodes"] {
+                todo.extend(node[key].as_array().into_iter().flatten());
+            }
+            if node["visible"] == true && node["pid"].is_u64() {
+                return Some(node);
+            }
+        }
+        None
+    })
+}
+
+fn visible_window(swaysock: &Path, point: Option<(u32, u32)>) -> Result<Option<Window>, String> {
+    let focus = match point {
+        Some(_) => None,
+        None => seat_focus(swaysock, AGENT_SEAT)?,
+    };
+    let tree = swaymsg(swaysock, &["-t", "get_tree"])?;
+    let mut candidates = visible_windows(&tree).filter(|window| match point {
+        Some((x, y)) => {
+            let rect = &window["rect"];
+            let left = rect["x"].as_i64().unwrap_or_default();
+            let top = rect["y"].as_i64().unwrap_or_default();
+            let (x, y) = (i64::from(x), i64::from(y));
+            (left..left + rect["width"].as_i64().unwrap_or_default()).contains(&x)
+                && (top..top + rect["height"].as_i64().unwrap_or_default()).contains(&y)
+        }
+        None => window["id"]
+            .as_u64()
+            .zip(focus)
+            .is_some_and(|(id, focus)| id == focus),
+    });
+    Ok(candidates
+        .next()
+        .filter(|_| candidates.next().is_none())
+        .and_then(|window| Window::deserialize(window).ok()))
+}
+
+fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Option<Target>, String> {
     let Some(library) = std::env::var_os("SELLAITE_ATSPI_LIBRARY") else {
-        return Ok(Value::Null);
+        return Ok(None);
     };
     let info = desktop.info();
+    let Some(window) = visible_window(&info.swaysock, point)? else {
+        return Ok(None);
+    };
     let coords = point.map(|(x, y)| format!("{x},{y}")).unwrap_or_default();
     let output = std::process::Command::new("timeout")
         .args([
@@ -167,11 +254,22 @@ fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Value, 
             include_str!("approval_target.py"),
             &info.id,
             &coords,
+            &window.pid.to_string(),
+            &window.name,
+            &window.rect.to_string(),
         ])
         .output()
         .map_err(|e| format!("cannot run timeout (package: coreutils): {e}"))?;
     match output.status.code() {
-        Some(0) => serde_json::from_slice(&output.stdout).map_err(|e| e.to_string()),
+        Some(0) => {
+            let element: Option<Element> =
+                serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+            if element.is_some() && visible_window(&info.swaysock, point)?.as_ref() != Some(&window)
+            {
+                return Ok(None);
+            }
+            Ok(element.map(|element| Target { window, element }))
+        }
         Some(126 | 127) => Err(format!(
             "cannot run python3 (Ubuntu package: python3, Arch package: python): {}",
             String::from_utf8_lossy(&output.stderr).trim_end()
@@ -181,7 +279,7 @@ fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Value, 
             library.to_string_lossy(),
             String::from_utf8_lossy(&output.stderr).trim_end()
         )),
-        _ => Ok(Value::Null),
+        _ => Ok(None),
     }
 }
 

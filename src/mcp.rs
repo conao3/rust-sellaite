@@ -8,7 +8,7 @@ use crate::desktop::Desktop;
 use crate::input::Button;
 use crate::{approval, chord};
 
-fn coord_from(value: &Value, key: &str) -> Result<u32, String> {
+pub(crate) fn coord_from(value: &Value, key: &str) -> Result<u32, String> {
     value[key]
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())

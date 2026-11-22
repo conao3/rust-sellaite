@@ -78,7 +78,7 @@ From a source checkout, run `LEANFRAN_OFFLINE=1 cargo install --locked --path .`
 | `sway` and `swaymsg` (both in `sway` on Ubuntu and Arch) | Run the headless desktop and inspect window focus during `launch`. |
 | `grim` | Capture PNG screenshots. |
 | `wayvnc` | Serve the desktop over a Unix socket on the user's input seat. |
-| `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Optional AT-SPI2 checks for sensitive input. |
+| `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Resolve AT-SPI2 targets for sensitive input and approvals. |
 | noVNC | Render the desktop in the dashboard. |
 | `foot`, a font and D-Bus | Provide a terminal for the quick start and a session bus for accessibility-enabled apps. |
 
@@ -93,8 +93,7 @@ as an unprivileged user.
 
 To enable AT-SPI2 checks, set `SELLAITE_ATSPI_LIBRARY=libatspi.so.0` in the MCP
 server's environment and run it inside a D-Bus user session. You can also set
-an absolute library path. When the variable is unset, declared input intents
-still trigger approvals.
+an absolute library path. Approvals require an accessible target.
 
 The dashboard reads noVNC from `/usr/share/novnc` by default. The Ubuntu
 `novnc` package installs it there. On Arch, unpack an [upstream noVNC
@@ -160,21 +159,23 @@ the destination hostname in `domain`. Set `SELLAITE_ALLOWED_DOMAINS` on the
 MCP server to a comma-separated list of exact hostnames (empty by default).
 A missing navigation destination requires approval.
 
-sellaite also checks the AT-SPI2 role and name when the application's
-accessibility tree is reachable on the session bus and identifies a unique
-target from a process launched by this desktop. It checks password text
-fields and English button names such as Send, Submit, Buy and Pay. On
-Wayland some toolkits cannot report screen coordinates or report coordinates
-relative to a window. A click then uses a box around the click coordinates
-when no accessible bounds are available. A type request with no accessible
-bounds highlights the entire desktop. An inaccessible target leaves detection
-to the declared intent. This feature depends on accurate agent declarations.
+sellaite looks up the target through AT-SPI2 in the visible window at the
+click point or in the window with the agent seat's keyboard focus. It checks
+password text fields and English button names such as Send, Submit, Buy and
+Pay. A sensitive action requires a unique accessible target with screen bounds
+in a window launched by this desktop. The dashboard displays its application,
+window title, role and name and outlines the element. Some Wayland toolkits
+report window-relative coordinates or omit coordinates. Automatic detection
+depends on the application's accessibility support and accurate agent
+declarations.
 Shortcuts, custom controls, other tools and the browser's eventual destination
 (including redirects) fall outside these checks.
 
 The MCP call waits up to 60 seconds for **Approve**, **Edit** or **Reject**.
-Editing replaces the click coordinates or the text and approves the replacement.
-A changed screenshot, a pause, a rejection or a timeout discards the operation.
+Editing replaces the click coordinates within the same target or replaces the
+text. After approval, sellaite compares the screenshot and resolves the
+target again at the final click coordinates or keyboard focus. A changed
+screenshot or target, pause, rejection or timeout discards the operation.
 The runtime directory holds the pending request metadata while the call waits.
 The original text stays in MCP memory. A dashboard text replacement passes
 through a short-lived decision file in the private runtime directory.
@@ -189,9 +190,8 @@ through a short-lived decision file in the private runtime directory.
   exposes the relevant controls. Firefox can leave its accessibility tree
   disabled until accessibility is enabled in the desktop session. A Wayland
   application may expose a focused field while its button coordinates remain
-  unavailable, and a window behind the active app can make the click target
-  ambiguous. Declare the intent for sensitive actions even when accessibility
-  is enabled.
+  unavailable. Overlapping visible windows at a click point are ambiguous.
+  Declare the intent for sensitive actions even when accessibility is enabled.
 - `launch` with `wait_for_window` waits for the first window to map. An
   immediate screenshot can still be blank, and a multi-window app can open
   more windows afterwards. Check the displayed windows before sending input.
