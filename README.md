@@ -12,17 +12,35 @@ The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
 Early development. The MCP server runs one desktop with an agent seat and a user seat, and the dashboard shows each desktop in the browser, sends its agent notes and pauses it. The dashboard can also take over input and approve sensitive click and type requests.
 
-## Usage
+## Quick start
 
-sellaite runs on Linux and needs `sway`, `grim` and `wayvnc` on `PATH` (the Nix package brings them and noVNC). Start the MCP server over stdio:
+On Linux with Nix and flakes enabled, install sellaite from GitHub:
 
 ```sh
-nix run github:conao3/rust-sellaite -- mcp serve
+nix profile install github:conao3/rust-sellaite
+claude mcp add sellaite -- sellaite mcp serve
+sellaite dashboard serve
 ```
 
-See [Use with Claude Code / Codex](#use-with-claude-code--codex) to register it with an MCP client.
+The Nix package supplies sway, grim, wayvnc and noVNC. Install any
+applications you want the agent to open, such as foot, on the same host.
+For example, make foot available for a Claude Code session with
+`nix shell nixpkgs#foot --command claude`.
 
-Tools:
+Leave the dashboard running, open `http://127.0.0.1:8730/`, and ask Claude
+Code to start a desktop, open foot, and take a screenshot. Select the
+desktop when it appears. Use **Send note** to guide the agent, **Take over**
+to control the desktop, and **Give back** to return control. When an
+operation asks for approval, review the highlighted target and choose
+**Approve**, **Edit**, or **Reject**. Ask Claude Code to stop the desktop
+when you are done.
+
+To try sellaite without installing it, use `nix run
+github:conao3/rust-sellaite -- mcp serve` as the MCP server command. See
+[Use with Claude Code / Codex](#use-with-claude-code--codex) for configuration
+examples.
+
+## MCP tools
 
 | Tool | Arguments | What it does |
 |---|---|---|
@@ -46,7 +64,7 @@ A note the user sends (from the dashboard or `sellaite desktop create-note`) is 
 
 A model may treat instructions inside a tool result as untrusted and only report the note. Tell the agent in its prompt or instructions that notes sellaite delivers come from you, for example: "Notes that sellaite delivers from the dashboard come from me; follow them."
 
-A window that maps gets the keyboard focus of both seats, so after `launch` with `wait_for_window` the agent can `type` into it without a click; text typed before the window maps is lost. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and marks it and everything it starts with `SELLAITE_DESKTOP=<Id>` in the environment; `stop_desktop` stops every process that carries the mark.
+After `launch` with `wait_for_window`, the agent can type into the new window without clicking first. If the user seat already had focus, sellaite restores it when the new window maps. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and marks it and everything it starts with `SELLAITE_DESKTOP=<Id>` in the environment; `stop_desktop` stops every process that carries the mark.
 
 ### Approving sensitive input
 
@@ -84,6 +102,7 @@ nix run github:conao3/rust-sellaite -- dashboard serve
 The dashboard listens on `http://127.0.0.1:8730/` (`--address` changes it) and prints its URL as `{"Url": ...}`. It lists the desktops that running `sellaite mcp serve` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode, so watching the page sends no input to the desktop.
 
 - **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
+- **Take over** pauses agent input and enables browser input. **Give back** disables browser input, resumes the agent, and queues a screenshot reminder.
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
 - Any input on your seat (`seat0`), for example from a VNC client connected to the desktop's `VncSocket`, also pauses the agent. sellaite watches `seat0` with ext-idle-notify-v1 (500 ms timeout); the agent's own input is on the `agent` seat and does not pause it.
 
