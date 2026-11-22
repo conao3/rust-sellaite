@@ -143,7 +143,7 @@ The agent's clicks and keystrokes come from a virtual pointer and a virtual keyb
 
 While the agent is paused, `launch`, `click`, `type` and `key` return an error that says the user paused it; `screenshot`, `wait` and `stop_desktop` still work.
 
-Use **Take over** to pause the agent and enable input on the dashboard. **Give back** turns off dashboard input, resumes the agent, and queues a reminder to take a screenshot before acting.
+Use **Take over** to pause the agent and enable input on the dashboard. **Give back** turns off dashboard input, requests a resume, and queues a reminder to take a screenshot before acting.
 
 A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes one text item per note, oldest first, starting with `[sellaite] Note from the user`. A result that carries notes has no `structuredContent` (Claude Code shows only `structuredContent` when it is present). The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
 
@@ -206,10 +206,10 @@ The dashboard listens on loopback (default `127.0.0.1:8730`, configurable with `
 
 For an always-on dashboard, pass `--token-file /path/to/dashboard-token` in an existing private directory. The dashboard creates a missing file with mode `0600` and refuses files with group or other permissions. With the same token file and listening address, the startup URL and existing browser cookies continue to work across restarts.
 
-- **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
-- **Take over** pauses agent input and grants control to the current tab. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, resumes the agent, and queues a screenshot reminder.
+- **Stop the agent** pauses the agent and cancels a pending resume. **Resume** lets the agent act once your seat (`seat0`) has been idle for 1 second. The dashboard shows **Waiting to resume** while your seat is active.
+- **Take over** pauses agent input and grants control to the current tab. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, requests a resume with the same idle requirement, and queues a screenshot reminder.
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
-- Input on your seat (`seat0`) pauses the agent when it follows at least 500 ms of inactivity. Continuous input can leave the agent running after **Resume**. Wait at least 500 ms after your last input on that seat before pressing **Resume**. The agent's own input uses its separate seat.
+- The first input on your seat after it has gone idle pauses the agent. The agent's own input uses its separate seat.
 
 The dashboard serves noVNC from `--novnc-dir`, `SELLAITE_NOVNC_DIR` or `/usr/share/novnc`, in that order, and proxies the browser's WebSocket to the desktop's wayvnc unix socket. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
 

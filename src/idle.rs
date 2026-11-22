@@ -16,7 +16,7 @@ use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtId
 
 use crate::runtime;
 
-pub const TIMEOUT_MS: u32 = 500;
+pub const TIMEOUT_MS: u32 = 1000;
 
 const POLL_MS: i32 = 100;
 
@@ -96,18 +96,16 @@ impl Dispatch<ExtIdleNotificationV1, ()> for State {
 
 impl State {
     fn handle_idle_event(&self, event: ext_idle_notification_v1::Event) {
-        match event {
-            ext_idle_notification_v1::Event::Idled => {
-                runtime::set_user_idle(&self.runtime_dir, true);
-            }
+        let result = match event {
+            ext_idle_notification_v1::Event::Idled => runtime::user_idled(&self.runtime_dir),
             ext_idle_notification_v1::Event::Resumed => {
                 let reason = format!("the user used their own seat ({})", self.seat_name);
-                if let Err(e) = runtime::pause(&self.runtime_dir, &reason) {
-                    eprintln!("sellaite: {e}");
-                }
-                runtime::set_user_idle(&self.runtime_dir, false);
+                runtime::user_resumed(&self.runtime_dir, &reason)
             }
-            _ => {}
+            _ => return,
+        };
+        if let Err(e) = result {
+            eprintln!("sellaite: {e}");
         }
     }
 }
@@ -166,6 +164,12 @@ pub fn watch(socket: &Path, seat_name: &str, runtime_dir: &Path) -> Result<Watch
             if unsafe { libc::poll(&mut fd, 1, POLL_MS) } > 0 && guard.read().is_err() {
                 break;
             }
+        }
+        if !stopping.load(Ordering::Relaxed)
+            && let Err(e) =
+                runtime::user_resumed(&state.runtime_dir, "the user seat watcher disconnected")
+        {
+            eprintln!("sellaite: {e}");
         }
     });
     Ok(Watcher {

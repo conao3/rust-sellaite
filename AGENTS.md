@@ -35,10 +35,9 @@ user's cursor or focus. See `README.md` for the goal.
   (virtual pointer and keyboard, screen capture, the ext-idle-notify-v1 watcher
   of `seat0`), the MCP server, the dashboard (HTTP, the WebSocket proxy to
   wayvnc), and the CLI (`clap`).
-- Pause is a file check, not a state machine: `src/runtime.rs` writes
-  `paused` (holding the reason) into the desktop's runtime directory, and the
-  MCP input tools refuse while it exists. It stays in Rust while it has no
-  transitions beyond set and clear.
+- Pause state lives in the desktop's runtime directory. MCP input tools refuse
+  while `paused` exists or the user has taken over. `src/runtime.rs` serializes
+  pause and idle updates across the dashboard and MCP processes with a file lock.
 - Notes are a file queue in the same way: `runtime::add_note` writes each note
   to `notes/.<name>.tmp` and renames it to `notes/<name>` (the name starts
   with the time in nanoseconds), and `runtime::take_notes` reads the names in
@@ -118,9 +117,10 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   `user-idle`, and the `notes` directory. `sellaite dashboard serve` finds desktops by scanning these
   directories, so one dashboard serves every MCP server of the user.
 - `src/idle.rs` binds `ext_idle_notifier_v1` (version 2 uses
-  `get_input_idle_notification`) on `seat0` with a 500 ms timeout: `idled`
-  writes `user-idle`, `resumed` writes `paused`. Input within 500 ms of the
-  previous input on `seat0` raises no new `resumed`.
+  `get_input_idle_notification`) on `seat0` with a 1 second timeout. `idled`
+  writes `user-idle` and completes a pending resume. `resumed` writes `paused`
+  and clears `user-idle`. Resume and Give back wait for idle when the seat is
+  active. Stop cancels a pending resume.
 - `runtime::remove_stale` (run when `mcp serve` starts) removes a directory
   whose `sellaite.json` names a dead process, or that has no `sellaite.json`,
   is older than 60 s and has no Wayland socket that accepts a connection.

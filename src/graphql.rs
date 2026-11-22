@@ -36,6 +36,7 @@ pub struct Desktop {
     paused: bool,
     taking_over: bool,
     paused_reason: Option<String>,
+    resume_pending: bool,
     user_seat_idle: bool,
     pending_approval: Option<Approval>,
     pending_notes: usize,
@@ -83,6 +84,7 @@ impl Desktop {
             pid: state.as_ref().map(|s| s.pid),
             paused: paused_reason.is_some(),
             taking_over: runtime::taking_over(dir),
+            resume_pending: paused_reason.as_deref() == Some(runtime::RESUME_PENDING_REASON),
             paused_reason,
             user_seat_idle: runtime::user_idle(dir),
             pending_approval: crate::approval::pending(dir)
@@ -222,7 +224,7 @@ mod tests {
     fn desktop_status_reads_pause_idle_and_notes_from_disk() {
         let dir = tempfile::tempdir().unwrap();
         runtime::pause(dir.path(), "paused for review").unwrap();
-        runtime::set_user_idle(dir.path(), true);
+        runtime::user_idled(dir.path()).unwrap();
         runtime::add_note(dir.path(), "review this").unwrap();
 
         let desktop = Desktop::read("Ab1234", dir.path());

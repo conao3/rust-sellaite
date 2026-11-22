@@ -20,6 +20,8 @@ const STATE_FILE: &str = "sellaite.json";
 
 const PAUSED_FILE: &str = "paused";
 
+pub const RESUME_PENDING_REASON: &str = "waiting for your seat to be idle for 1 second";
+
 const USER_IDLE_FILE: &str = "user-idle";
 
 const NOTES_DIR: &str = "notes";
@@ -152,11 +154,41 @@ pub fn read_state(dir: &Path) -> Option<State> {
     serde_json::from_slice(&fs::read(dir.join(STATE_FILE)).ok()?).ok()
 }
 
+fn lock_pause(dir: &Path) -> Result<fs::File, String> {
+    let lock = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join("pause.lock"))
+        .map_err(|e| format!("cannot open pause lock: {e}"))?;
+    lock.lock()
+        .map_err(|e| format!("cannot lock pause state: {e}"))?;
+    Ok(lock)
+}
+
 pub fn pause(dir: &Path, reason: &str) -> Result<(), String> {
+    let _lock = lock_pause(dir)?;
+    write_pause(dir, reason)
+}
+
+fn write_pause(dir: &Path, reason: &str) -> Result<(), String> {
     write_atomically(&dir.join(PAUSED_FILE), reason.as_bytes())
 }
 
 pub fn resume(dir: &Path) -> Result<(), String> {
+    let _lock = lock_pause(dir)?;
+    request_resume(dir)
+}
+
+fn request_resume(dir: &Path) -> Result<(), String> {
+    if user_idle(dir) {
+        clear_pause(dir)
+    } else {
+        write_pause(dir, RESUME_PENDING_REASON)
+    }
+}
+
+fn clear_pause(dir: &Path) -> Result<(), String> {
     match fs::remove_file(dir.join(PAUSED_FILE)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("cannot resume: {e}")),
         _ => Ok(()),
@@ -172,11 +204,12 @@ pub fn take_over(dir: &Path) -> Result<(), String> {
 }
 
 pub fn give_back(dir: &Path) -> Result<(), String> {
+    let _lock = lock_pause(dir)?;
     add_note(
         dir,
         "The user changed the screen. Take a screenshot before acting.",
     )?;
-    resume(dir)?;
+    request_resume(dir)?;
     fs::remove_file(dir.join("takeover")).map_err(|e| format!("cannot give back: {e}"))
 }
 
@@ -187,12 +220,23 @@ pub fn paused(dir: &Path) -> Option<String> {
     fs::read_to_string(dir.join(PAUSED_FILE)).ok()
 }
 
-pub fn set_user_idle(dir: &Path, idle: bool) {
-    let path = dir.join(USER_IDLE_FILE);
-    if idle {
-        let _ = fs::write(path, b"");
-    } else {
-        let _ = fs::remove_file(path);
+pub fn user_idled(dir: &Path) -> Result<(), String> {
+    let _lock = lock_pause(dir)?;
+    fs::write(dir.join(USER_IDLE_FILE), b"").map_err(|e| format!("cannot mark seat idle: {e}"))?;
+    if paused(dir).as_deref() == Some(RESUME_PENDING_REASON) {
+        clear_pause(dir)?;
+    }
+    Ok(())
+}
+
+pub fn user_resumed(dir: &Path, reason: &str) -> Result<(), String> {
+    let _lock = lock_pause(dir)?;
+    let result = write_pause(dir, reason);
+    match fs::remove_file(dir.join(USER_IDLE_FILE)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => {
+            Err(format!("cannot mark seat active: {e}"))
+        }
+        _ => result,
     }
 }
 
@@ -409,14 +453,18 @@ mod tests {
 
     #[test]
     fn pause_and_resume_round_trip() {
-        let dir = make_dir().unwrap();
-        assert_eq!(paused(&dir), None);
-        pause(&dir, "the user pressed stop").unwrap();
-        assert_eq!(paused(&dir).as_deref(), Some("the user pressed stop"));
-        resume(&dir).unwrap();
-        resume(&dir).unwrap();
-        assert_eq!(paused(&dir), None);
-        fs::remove_dir_all(&dir).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        assert_eq!(paused(dir), None);
+        pause(dir, "the user pressed stop").unwrap();
+        resume(dir).unwrap();
+        assert_eq!(paused(dir).as_deref(), Some(RESUME_PENDING_REASON));
+        pause(dir, "the user pressed stop").unwrap();
+        user_idled(dir).unwrap();
+        assert_eq!(paused(dir).as_deref(), Some("the user pressed stop"));
+        resume(dir).unwrap();
+        resume(dir).unwrap();
+        assert_eq!(paused(dir), None);
     }
 
     #[test]

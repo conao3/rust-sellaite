@@ -121,7 +121,7 @@ impl Dashboard {
     }
 
     fn desktop(&self, id: &str) -> Option<Value> {
-        let (status, list) = self.graphql(&self.origin(), "{ desktops { Id: id Paused: paused PausedReason: pausedReason UserSeatIdle: userSeatIdle TakingOver: takingOver PendingNotes: pendingNotes PendingApproval: pendingApproval { Id: id Tool: tool Target: target { Application: application Window: window Role: role Name: name } Bounds: bounds { X: x Y: y Width: width Height: height } } } }", json!({}));
+        let (status, list) = self.graphql(&self.origin(), "{ desktops { Id: id Paused: paused PausedReason: pausedReason ResumePending: resumePending UserSeatIdle: userSeatIdle TakingOver: takingOver PendingNotes: pendingNotes PendingApproval: pendingApproval { Id: id Tool: tool Target: target { Application: application Window: window Role: role Name: name } Bounds: bounds { X: x Y: y Width: width Height: height } } } }", json!({}));
         assert_eq!(status, 200);
         list["data"]["desktops"]
             .as_array()
@@ -362,14 +362,48 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         403
     );
     assert_eq!(dashboard.desktop(&id).unwrap()["Paused"], true);
+    pointer_event(&mut vnc, 110, 100);
     assert_eq!(
         dashboard
             .control("resumeDesktop", &id, &dashboard.origin())
             .1["data"]["resumeDesktop"]["id"],
         id
     );
-    assert_eq!(dashboard.desktop(&id).unwrap()["Paused"], false);
+    for x in 111..126 {
+        pointer_event(&mut vnc, x, 100);
+        let desktop = dashboard.desktop(&id).unwrap();
+        assert_eq!(desktop["ResumePending"], true, "{desktop}");
+        assert_eq!(desktop["Paused"], true, "{desktop}");
+        assert_eq!(desktop["UserSeatIdle"], false, "{desktop}");
+        let result = mcp.request(
+            "tools/call",
+            json!({"name": "click", "arguments": {"x": 1, "y": 1}}),
+        );
+        assert!(
+            is_error(&result),
+            "click ran while the user was active: {result}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let desktop = wait_for("the queued resume after the user seat goes idle", || {
+        dashboard.desktop(&id).filter(|d| d["Paused"] == false)
+    });
+    assert_eq!(desktop["UserSeatIdle"], true, "{desktop}");
+    assert_eq!(desktop["ResumePending"], false, "{desktop}");
     mcp.call("click", json!({"x": 400, "y": 300}));
+
+    pointer_event(&mut vnc, 150, 100);
+    wait_for("the first input after idle to pause again", || {
+        dashboard.desktop(&id).filter(|d| d["Paused"] == true)
+    });
+    let result = mcp.request(
+        "tools/call",
+        json!({"name": "click", "arguments": {"x": 1, "y": 1}}),
+    );
+    assert!(
+        is_error(&result),
+        "click ran after the next user input: {result}"
+    );
 
     assert_eq!(
         dashboard
@@ -395,6 +429,9 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
             .1["data"]["resumeDesktop"]["id"],
         id
     );
+    wait_for("the agent to resume", || {
+        dashboard.desktop(&id).filter(|d| d["Paused"] == false)
+    });
     mcp.call("type", json!({"text": "again"}));
     drop(vnc);
 
@@ -423,14 +460,16 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     assert!(idle(), "the spectator's pointer reached seat0");
     send_vnc(tab_a.get_mut(), &[5, 0, 0, 50, 0, 50]);
     wait_for("owner pointer", || (!idle()).then_some(()));
-    wait_for("idle user seat", || idle().then_some(()));
 
     let returned = takeover(&dashboard, &id, "giveBackDesktop", connection_a);
     assert_eq!(
         returned["data"]["giveBackDesktop"]["ownsTakeover"], false,
         "{returned}"
     );
-    assert_eq!(dashboard.desktop(&id).unwrap()["TakingOver"], false);
+    let desktop = dashboard.desktop(&id).unwrap();
+    assert_eq!(desktop["TakingOver"], false, "{desktop}");
+    assert_eq!(desktop["ResumePending"], true, "{desktop}");
+    wait_for("idle user seat after Give back", || idle().then_some(()));
     send_vnc(tab_b.get_mut(), &[5, 0, 0, 75, 0, 75]);
     std::thread::sleep(Duration::from_millis(100));
     assert!(idle(), "a pointer reached seat0 after Give back");
@@ -570,6 +609,9 @@ fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
     assert_eq!(shot["content"][0]["type"], "image");
     assert_eq!(notes_in(&shot), ["before a screenshot"]);
 
+    wait_for("the agent to resume", || {
+        dashboard.desktop(&id).filter(|d| d["Paused"] == false)
+    });
     assert_eq!(create_note(&id, "while launching").0, 0);
     let launched = first.call("launch", json!({"argv": ["true"]}));
     assert_eq!(notes_in(&launched), ["while launching"]);

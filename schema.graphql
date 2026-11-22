@@ -37,6 +37,7 @@ type Desktop {
 	paused: Boolean!
 	takingOver: Boolean!
 	pausedReason: String
+	resumePending: Boolean!
 	userSeatIdle: Boolean!
 	pendingApproval: Approval
 	pendingNotes: Int!

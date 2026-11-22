@@ -282,7 +282,7 @@ function renderList(current) {
     size.textContent = `${d.Width}×${d.Height}`;
     const badge = document.createElement("span");
     badge.className = `badge ${d.Paused ? "paused" : "running"}`;
-    badge.textContent = d.Paused ? "Paused" : "Running";
+    badge.textContent = d.ResumePending ? "Waiting to resume" : d.Paused ? "Paused" : "Running";
     a.append(name, size, badge);
     li.append(a);
     return li;
@@ -303,13 +303,15 @@ function render() {
   status.replaceChildren();
   const badge = document.createElement("span");
   badge.className = `badge ${desktop.Paused ? "paused" : "running"}`;
-  badge.textContent = desktop.Paused ? "Paused" : desktop.PendingApproval ? "Waiting for approval" : "Running";
+  badge.textContent = desktop.ResumePending ? "Waiting to resume"
+    : desktop.Paused ? "Paused" : desktop.PendingApproval ? "Waiting for approval" : "Running";
   status.append(badge, document.createTextNode(desktop.Paused
     ? ` The agent's click, type and key return an error: ${desktop.PausedReason}.`
     : desktop.PendingApproval ? " The agent is waiting for a decision." : " The agent can click, type and press keys."));
-  $("stop").disabled = busy || desktop.Paused;
-  $("stop").title = desktop.Paused ? "The agent is already paused." : "Pause the agent: its input tools return an error until you resume it.";
-  $("resume").disabled = busy || !desktop.Paused || desktop.TakingOver;
+  $("stop").disabled = busy || (desktop.Paused && !desktop.ResumePending);
+  $("stop").title = desktop.ResumePending ? "Cancel the pending resume."
+    : desktop.Paused ? "The agent is already paused." : "Pause the agent: its input tools return an error until you resume it.";
+  $("resume").disabled = busy || !desktop.Paused || desktop.ResumePending || desktop.TakingOver;
   $("resume").title = desktop.Paused ? "Let the agent use its input tools again." : "The agent is not paused.";
   renderCompose(desktop);
   connect(desktop.Id);
@@ -360,7 +362,7 @@ function renderApproval(desktop) {
 
 const desktopFields = `
   Id: id Width: width Height: height Pid: pid Paused: paused TakingOver: takingOver OwnsTakeover: ownsTakeover
-  PausedReason: pausedReason UserSeatIdle: userSeatIdle PendingNotes: pendingNotes
+  PausedReason: pausedReason ResumePending: resumePending UserSeatIdle: userSeatIdle PendingNotes: pendingNotes
   PendingApproval: pendingApproval {
     Id: id Tool: tool Reason: reason Domain: domain X: x Y: y
     Target: target { Application: application Window: window Role: role Name: name }
