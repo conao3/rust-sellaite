@@ -1,8 +1,9 @@
 mod common;
 
+use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -257,11 +258,21 @@ fn mcp_startup_cleans_up_marked_processes_from_a_stale_desktop() {
     let id = id.strip_prefix("sel.").unwrap();
     let lock = std::fs::File::open(dir.path()).unwrap();
     lock.lock().unwrap();
-    let mut process = Command::new("sleep")
-        .arg("600")
+    let mut process = Command::new("sh")
+        .args(["-c", "printf R; read -r line"])
         .env("SELLAITE_DESKTOP", id)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .spawn()
         .unwrap();
+    let mut ready = [0];
+    process
+        .stdout
+        .take()
+        .unwrap()
+        .read_exact(&mut ready)
+        .unwrap();
+    assert_eq!(ready, *b"R");
     assert_eq!(marked(id), [process.id()]);
     std::fs::write(
         dir.path().join("sellaite.json"),
