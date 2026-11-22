@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::chord::Chord;
 use crate::input::{Button, SeatInput};
 
 pub const AGENT_SEAT: &str = "agent";
@@ -194,6 +195,10 @@ impl Desktop {
 
     pub fn type_text(&mut self, text: &str) -> Result<(), String> {
         self.input.type_text(text)
+    }
+
+    pub fn key(&mut self, chord: &Chord) -> Result<(), String> {
+        self.input.key(chord)
     }
 
     pub fn screenshot(&self) -> Result<Vec<u8>, String> {

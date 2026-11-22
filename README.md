@@ -35,6 +35,7 @@ Tools:
 | `screenshot` | | Returns the whole desktop as a PNG image. |
 | `click` | `x`, `y`, `button` (`left`, `right`, `middle`) | Moves the agent's pointer and clicks. |
 | `type` | `text` | Types the text into the window that has the agent's keyboard focus. |
+| `key` | `keys` (`Return`, `ctrl+l`, `alt+Tab`, ...) | Presses a key or a chord on the agent's keyboard, with the modifiers (`shift`, `ctrl`, `alt`, `super`) held as modifier state. |
 
 The agent's clicks and keystrokes come from a virtual pointer and a virtual keyboard created on the `agent` seat, so they move only that seat's cursor and focus. Your seat keeps its own focus.
 

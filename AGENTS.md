@@ -23,7 +23,8 @@ user's cursor or focus. See `README.md` for the goal.
 
 - Deterministic logic is defined in Lean inside `leanfran::lean!` blocks and
   generated to Rust by `leanfran-build` (`build.rs`). Today that is the
-  keymap layout of `type` (`src/keymap.rs`); seat and desktop state
+  keymap layout of `type` (`src/keymap.rs`) and the chord of `key`
+  (`src/chord.rs`); seat and desktop state
   transitions, input validation and geometry go to Lean as they grow beyond
   the single bounds check in `SeatInput::click`. The generated sources are cached in
   `.leanfran/cache/` and the Lean package in `lean/`; commit both. The Nix
@@ -63,6 +64,36 @@ key. Rust calls `split`, `slots` and `evdevKey`.
   keymap as xkb text. The unit test `keymap_names_unicode_and_control_keys`
   and the headless sway test check that the compositor accepts it.
 
+### `src/chord.rs` (`pub mod model`)
+
+`key` parses `keys` such as `ctrl+l` or `alt+Tab`, uploads a keymap with the
+key at keycode 9 and the modifier keys bound to `Shift`, `Control`, `Mod1`
+and `Mod4`, sends the modifier mask with `zwp_virtual_keyboard_v1.modifiers`,
+presses and releases the key, and clears the mask. Rust calls `chord`,
+`mask` and `Modifier.xkbName`.
+
+- `chord text` splits the text on `+` (`pieces`) and gives the modifier
+  parts and the last part as the key. Theorems: when it succeeds the parts
+  joined with `+` give the text back and every part is non-empty and has no
+  `+` (`chord_some`), and it fails exactly when a part is empty
+  (`chord_none`). The `+` key is written `plus`.
+- `mask mods` ORs the real-modifier bits (`Modifier.bit`: Shift 0, Control
+  2, Mod1 3, Mod4 6). Theorems: bit `i` of the mask is set exactly when a
+  modifier in the list has bit `i` (`testBit_mask`), distinct modifiers
+  have distinct bits (`bit_injective`), and bit `m.bit` is the xkb real
+  modifier named `m.xkbName` in the order Shift, Lock, Control, Mod1 to
+  Mod5 (`bit_xkbName`). `keymap::chord_source` writes `m.xkbName` in the
+  `modifier_map` of each modifier key, so the mask and the keymap agree.
+- `#assay` (`audit/Audit/Chord.lean`) on `chord`, `piecesFrom`, `pieces`,
+  `mask`, `Modifier.bit` and `Modifier.xkbName`: 57 mutants, 53 killed, no
+  holes, 3 stillborn, and 1 reported equivalent (`ps.any` turned into
+  `ps.all` in `chord`), which differs only on texts with a `+` beside an
+  empty part; random inputs rarely hold a `+`, and the unit test
+  `rejects_empty_parts_and_unknown_names` rejects `ctrl+` and `+l`.
+- Outside the audit: the modifier and key name tables in Rust (`modifier`,
+  `named_key`), and the rest of `keymap::chord_source`. The unit tests in `src/chord.rs`
+  and `src/keymap.rs` and the headless sway test check them.
+
 ## Conventions
 
 - Edition 2024; `rustfmt.toml` pins `style_edition = "2024"`.
@@ -83,8 +114,11 @@ key. Rust calls `split`, `slots` and `evdevKey`.
   Wayland socket path is limited to 108 bytes and sway fails to start with a
   long runtime directory.
 - `tests/two_seats.rs` drives the real path: it starts `sellaite mcp serve`,
-  opens two `foot` terminals in the desktop, clicks and types through MCP, and
-  checks with `swaymsg -t get_seats` that `seat0` keeps its focus. `nix build`
+  opens two `foot` terminals in the desktop, clicks, types and presses keys
+  through MCP, and checks with `swaymsg -t get_seats` that `seat0` keeps its
+  focus. `ctrl+l` and `Return` must arrive in the agent's terminal as `^L`
+  and a newline, and `alt+Tab`, bound in sway to `focus right`, must move
+  only the agent seat's focus. `nix build`
   runs it in the sandbox, so `nativeCheckInputs` carries `sway-unwrapped`,
   `grim` and `foot`, and `FONTCONFIG_FILE` points at a fixed font set.
 - The flake uses `sway-unwrapped`: the nixpkgs `sway` wrapper starts

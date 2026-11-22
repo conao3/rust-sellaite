@@ -3,6 +3,7 @@ use std::io::{BufRead, Write};
 use base64::Engine;
 use serde_json::{Value, json};
 
+use crate::chord;
 use crate::desktop::Desktop;
 use crate::input::Button;
 
@@ -60,6 +61,16 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
                 "required": ["text"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "key",
+            "description": "Press a key or a chord on the agent seat's keyboard, such as Return, ctrl+l or alt+Tab. Modifiers (shift, ctrl, alt, super) are held as modifier state while the key is pressed. The key is one character or Return, Tab, Escape, BackSpace, Delete, Insert, Home, End, Page_Up, Page_Down, Left, Right, Up, Down, space, plus, Menu, Print or F1 to F24.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"keys": {"type": "string", "description": "Modifiers and a key joined by +"}},
+                "required": ["keys"],
                 "additionalProperties": false
             }
         }
@@ -150,6 +161,15 @@ impl Server {
                     text.chars().count()
                 )))
             }
+            "key" => {
+                let keys = args
+                    .get("keys")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "keys must be a string".to_string())?;
+                let chord = chord::parse(keys)?;
+                self.desktop()?.key(&chord)?;
+                Ok(text_result(format!("pressed {keys}")))
+            }
             other => Err(format!("unknown tool {other:?}")),
         }
     }
@@ -231,7 +251,8 @@ mod tests {
                 "stop_desktop",
                 "screenshot",
                 "click",
-                "type"
+                "type",
+                "key"
             ]
         );
     }

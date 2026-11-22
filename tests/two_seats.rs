@@ -213,6 +213,42 @@ fn agent_input_stays_on_the_agent_seat() {
     assert_eq!(sway.seat_focus("agent"), id_b);
     assert_eq!(std::fs::read_to_string(&log_a).unwrap(), "");
 
+    mcp.call("key", json!({"keys": "ctrl+l"}));
+    mcp.call("key", json!({"keys": "Return"}));
+    mcp.call("type", json!({"text": "z"}));
+    let text = format!("{text}\x0c\nz");
+    wait_for("ctrl+l, Return and z in termB", || {
+        (std::fs::read_to_string(&log_b).unwrap() == text).then_some(())
+    });
+    let unknown = mcp.request(
+        "tools/call",
+        json!({"name": "key", "arguments": {"keys": "hyper+l"}}),
+    );
+    assert_eq!(unknown["isError"], true, "{unknown}");
+    assert_eq!(sway.seat_focus("seat0"), id_a);
+    assert_eq!(sway.seat_focus("agent"), id_b);
+    assert_eq!(std::fs::read_to_string(&log_a).unwrap(), "");
+
+    assert!(
+        b["rect"]["x"].as_i64().unwrap() < a["rect"]["x"].as_i64().unwrap(),
+        "termB is not left of termA"
+    );
+    sway.msg(&["bindsym Mod1+Tab focus right"]);
+    mcp.call("key", json!({"keys": "alt+Tab"}));
+    wait_for("alt+Tab to move the agent seat to termA", || {
+        (sway.seat_focus("agent") == id_a).then_some(())
+    });
+    assert_eq!(
+        sway.seat_focus("seat0"),
+        id_a,
+        "alt+Tab on the agent seat moved the user seat"
+    );
+    mcp.call("type", json!({"text": "a"}));
+    wait_for("a in termA", || {
+        (std::fs::read_to_string(&log_a).unwrap() == "a").then_some(())
+    });
+    assert_eq!(std::fs::read_to_string(&log_b).unwrap(), text);
+
     let shot = mcp.call("screenshot", json!({}));
     let image = &shot["content"][0];
     assert_eq!(image["type"], "image");

@@ -14,6 +14,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1;
 
+use crate::chord::Chord;
 use crate::keymap;
 
 const BTN_LEFT: u32 = 0x110;
@@ -207,11 +208,7 @@ impl SeatInput {
         let chars: Vec<char> = text.chars().collect();
         for chunk in keymap::chunks(&chars) {
             let symbols = keymap::slots(&chunk);
-            let source = keymap::xkb_source(&symbols);
-            let fd = keymap_fd(&source)?;
-            self.keyboard
-                .keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), source.len() as u32 + 1);
-            self.sync()?;
+            self.upload_keymap(&keymap::xkb_source(&symbols))?;
             for c in &chunk {
                 let key =
                     keymap::evdev_key(&symbols, *c).ok_or_else(|| format!("no key for {c:?}"))?;
@@ -222,6 +219,23 @@ impl SeatInput {
             }
         }
         Ok(())
+    }
+
+    pub fn key(&mut self, chord: &Chord) -> Result<(), String> {
+        self.upload_keymap(&keymap::chord_source(&chord.keysym))?;
+        let time = self.time();
+        self.keyboard.modifiers(chord.mask, 0, 0, 0);
+        self.keyboard.key(time, keymap::CHORD_KEY, KEY_PRESSED);
+        self.keyboard.key(time, keymap::CHORD_KEY, KEY_RELEASED);
+        self.keyboard.modifiers(0, 0, 0, 0);
+        self.sync()
+    }
+
+    fn upload_keymap(&mut self, source: &str) -> Result<(), String> {
+        let fd = keymap_fd(source)?;
+        self.keyboard
+            .keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), source.len() as u32 + 1);
+        self.sync()
     }
 }
 

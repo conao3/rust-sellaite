@@ -173,6 +173,8 @@ leanfran::lean! {
     "#
 }
 
+use crate::chord::{self, Modifier};
+
 const FIRST_KEYCODE: u32 = 9;
 
 const LAST_KEYCODE: u32 = 255;
@@ -192,7 +194,7 @@ pub fn evdev_key(slots: &[char], c: char) -> Option<u32> {
         .map(|key| u64::try_from(key).expect("a key below the keymap capacity") as u32)
 }
 
-fn keysym(c: char) -> String {
+pub fn keysym(c: char) -> String {
     match c {
         '\n' => "Return".to_string(),
         '\t' => "Tab".to_string(),
@@ -203,12 +205,38 @@ fn keysym(c: char) -> String {
 }
 
 pub fn xkb_source(slots: &[char]) -> String {
+    let keys: Vec<(String, Option<String>)> = slots.iter().map(|c| (keysym(*c), None)).collect();
+    render(&keys)
+}
+
+pub const CHORD_KEY: u32 = 1;
+
+pub fn chord_source(keysym: &str) -> String {
+    let mut keys = vec![(keysym.to_string(), None)];
+    for (modifier, key) in [
+        (Modifier::Shift, "Shift_L"),
+        (Modifier::Control, "Control_L"),
+        (Modifier::Alt, "Alt_L"),
+        (Modifier::Logo, "Super_L"),
+    ] {
+        keys.push((
+            key.to_string(),
+            Some(chord::model::modifier_xkb_name(modifier)),
+        ));
+    }
+    render(&keys)
+}
+
+fn render(keys: &[(String, Option<String>)]) -> String {
     let mut codes = String::new();
     let mut symbols = String::new();
-    for (i, c) in slots.iter().enumerate() {
+    for (i, (keysym, modifier)) in keys.iter().enumerate() {
         let code = FIRST_KEYCODE + i as u32;
         codes.push_str(&format!("    <K{code}> = {code};\n"));
-        symbols.push_str(&format!("    key <K{code}> {{ [ {} ] }};\n", keysym(*c)));
+        symbols.push_str(&format!("    key <K{code}> {{ [ {keysym} ] }};\n"));
+        if let Some(modifier) = modifier {
+            symbols.push_str(&format!("    modifier_map {modifier} {{ <K{code}> }};\n"));
+        }
     }
     format!(
         "xkb_keymap {{\n\
@@ -256,5 +284,15 @@ mod tests {
         assert!(source.contains("key <K9> { [ U0061 ] };"));
         assert!(source.contains("key <K10> { [ Return ] };"));
         assert!(source.contains("key <K11> { [ U3042 ] };"));
+        assert!(!source.contains("modifier_map"));
+    }
+
+    #[test]
+    fn chord_keymap_maps_the_modifier_keys() {
+        let source = chord_source("Tab");
+        assert!(source.contains("key <K9> { [ Tab ] };"));
+        assert!(source.contains("key <K11> { [ Control_L ] };"));
+        assert!(source.contains("modifier_map Control { <K11> };"));
+        assert!(source.contains("modifier_map Mod4 { <K13> };"));
     }
 }

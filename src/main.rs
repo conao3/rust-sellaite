@@ -1,3 +1,4 @@
+mod chord;
 mod desktop;
 mod input;
 mod keymap;
