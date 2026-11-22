@@ -12,6 +12,20 @@ The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
 Early development. The MCP server runs one desktop with an agent seat and a user seat, and the dashboard shows each desktop in the browser, sends its agent notes and pauses it. The dashboard can also take over input and approve sensitive click and type requests.
 
+## Security
+
+**The agent desktop shares the MCP server user's operating-system permissions.** Wayland seats keep the agent's pointer and keyboard focus separate from yours. `launch` accepts any executable and arguments, including a shell. Programs can access files, sockets and services available to that user, and can make network requests.
+
+`launch` passes only selected environment variables for executable lookup, user and application configuration, locale, terminals, fonts, and the D-Bus and accessibility sessions, plus the desktop's own Wayland settings. API keys and `SSH_AUTH_SOCK` are omitted from the inherited environment. The launched process still has access to credentials available through files, sockets or services under the same account.
+
+- **Pause and takeover** help prevent conflicting input when you intervene. Pause makes the MCP server refuse new `launch`, `click`, `type` and `key` requests. Existing programs keep running, and programs with the same user permissions can modify the pause file in the desktop's runtime directory.
+- **Approval** helps catch mistakes in `click` and `type`. Detection relies on the agent's declared intent and the accessibility information sellaite can retrieve. Browser redirects, keystrokes sent with `key`, commands run with `launch`, and actions taken through other tools fall outside these checks.
+- **Dashboard authentication** protects the HTTP and WebSocket endpoints from callers without the dashboard credential. Host and Origin checks limit cross-origin browser access. For remote access, the trusted Tailscale Serve proxy supplies the login checked against the allowlist. Keep the backend on loopback and the startup URL private. Same-account programs can access the desktop runtime files and sockets directly.
+
+Use a dedicated unprivileged Linux user or a container for an agent you do not fully trust. Give it a separate home and browser profile, and keep your personal files, credentials and host sockets outside its reach. Apply any network restrictions you need at the operating-system or container boundary.
+
+Report vulnerabilities through the private channel in [SECURITY.md](SECURITY.md).
+
 ## Quick start
 
 On Linux with Nix and flakes enabled, install sellaite from GitHub:
@@ -108,8 +122,6 @@ The dashboard listens on loopback (default `127.0.0.1:8730`, configurable with `
 
 The dashboard serves noVNC from `--novnc-dir` or `SELLAITE_NOVNC_DIR` and proxies the browser's WebSocket to the desktop's wayvnc unix socket. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
 
-The token protects the dashboard's HTTP endpoints from callers that lack the credential. Run sellaite and its launched programs within a trusted operating-system account. Programs with access to that account's dashboard output, browser profile or desktop runtime files are inside the trust boundary.
-
 ### Notes from the command line
 
 ```sh
@@ -139,7 +151,7 @@ sellaite dashboard start-dashboard \
 
 ## Use with Claude Code / Codex
 
-The client needs no shell tool: it opens applications with `launch`. Run the client where `sway`, `grim`, `wayvnc` and the applications you want (for example `foot`) are on `PATH`.
+The client opens applications with `launch`, which can execute any program available to the MCP server's user. See [Security](#security) for isolation guidance. Run the client where `sway`, `grim`, `wayvnc` and the applications you want (for example `foot`) are on `PATH`.
 
 Claude Code:
 

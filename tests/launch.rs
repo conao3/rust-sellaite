@@ -71,7 +71,10 @@ fn launch_opens_a_focused_window_and_stop_desktop_ends_every_launched_process() 
     std::fs::create_dir_all(&out).unwrap();
     let file = out.join("out");
 
-    let mut mcp = Mcp::spawn();
+    let mut mcp = Mcp::spawn_with_env([
+        ("SELLAITE_TEST_SECRET", "test-secret"),
+        ("SSH_AUTH_SOCK", "/tmp/sellaite-test-ssh.sock"),
+    ]);
     let message = error_text(&mut mcp, "launch", json!({"argv": ["foot"]}));
     assert!(message.contains("start_desktop"), "{message}");
     let info = mcp.call("start_desktop", json!({}))["structuredContent"].clone();
@@ -88,6 +91,19 @@ fn launch_opens_a_focused_window_and_stop_desktop_ends_every_launched_process() 
     let window = &launched["Window"];
     assert_eq!(window["AppId"], "launched", "{launched}");
     assert_eq!(window["Pid"], foot);
+    let environment = std::fs::read(format!("/proc/{foot}/environ")).unwrap();
+    let environment: Vec<_> = environment.split(|&byte| byte == 0).collect();
+    for entry in [
+        format!("XDG_RUNTIME_DIR={}", runtime_dir.display()),
+        format!("SWAYSOCK={}", swaysock.display()),
+        format!(
+            "WAYLAND_DISPLAY={}",
+            info["WaylandDisplay"].as_str().unwrap()
+        ),
+        format!("SELLAITE_DESKTOP={id}"),
+    ] {
+        assert!(environment.contains(&entry.as_bytes()), "missing {entry}");
+    }
     assert_eq!(
         seat_focus(&swaysock, "agent"),
         window["Id"].as_i64().unwrap(),
@@ -163,6 +179,12 @@ fn launch_opens_a_focused_window_and_stop_desktop_ends_every_launched_process() 
     assert!(marked(&id).is_empty());
     assert!(!runtime_dir.exists());
     let _ = std::fs::remove_dir_all(&out);
+    for name in [b"SELLAITE_TEST_SECRET=".as_slice(), b"SSH_AUTH_SOCK="] {
+        assert!(
+            !environment.iter().any(|entry| entry.starts_with(name)),
+            "launch inherited {name:?}"
+        );
+    }
 }
 
 #[test]

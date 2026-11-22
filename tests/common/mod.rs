@@ -13,9 +13,14 @@ pub struct Mcp {
 
 impl Mcp {
     pub fn spawn() -> Self {
+        Self::spawn_with_env([])
+    }
+
+    pub fn spawn_with_env<'a>(env: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_sellaite"))
             .args(["mcp", "serve"])
             .env("SELLAITE_ALLOWED_DOMAINS", "allowed.example.invalid")
+            .envs(env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

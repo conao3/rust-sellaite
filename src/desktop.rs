@@ -292,11 +292,52 @@ impl Desktop {
         let mut command = Command::new(program);
         command
             .args(args)
+            .env_clear()
+            .envs(
+                [
+                    "PATH",
+                    "HOME",
+                    "USER",
+                    "LOGNAME",
+                    "SHELL",
+                    "LANG",
+                    "LANGUAGE",
+                    "LC_ALL",
+                    "LC_ADDRESS",
+                    "LC_COLLATE",
+                    "LC_CTYPE",
+                    "LC_IDENTIFICATION",
+                    "LC_MEASUREMENT",
+                    "LC_MESSAGES",
+                    "LC_MONETARY",
+                    "LC_NAME",
+                    "LC_NUMERIC",
+                    "LC_PAPER",
+                    "LC_TELEPHONE",
+                    "LC_TIME",
+                    "LOCALE_ARCHIVE",
+                    "TZ",
+                    "TERM",
+                    "TERMINFO",
+                    "TERMINFO_DIRS",
+                    "XDG_CONFIG_HOME",
+                    "XDG_CONFIG_DIRS",
+                    "XDG_DATA_HOME",
+                    "XDG_DATA_DIRS",
+                    "XDG_CACHE_HOME",
+                    "XDG_STATE_HOME",
+                    "FONTCONFIG_FILE",
+                    "FONTCONFIG_PATH",
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "AT_SPI_BUS_ADDRESS",
+                ]
+                .into_iter()
+                .filter_map(|name| std::env::var_os(name).map(|value| (name, value))),
+            )
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
             .env("WAYLAND_DISPLAY", &self.wayland_display)
             .env("SWAYSOCK", &self.swaysock)
             .env(launch::MARKER, id)
-            .env_remove("DISPLAY")
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
