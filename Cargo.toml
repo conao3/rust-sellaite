@@ -17,7 +17,7 @@ async-graphql-axum = "7"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
-getrandom = "0.3"
+getrandom = "0.4"
 leanfran = { version = "=0.6.0", default-features = false }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
