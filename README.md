@@ -18,8 +18,8 @@ On Linux with Nix and flakes enabled, install sellaite from GitHub:
 
 ```sh
 nix profile install github:conao3/rust-sellaite
-claude mcp add sellaite -- sellaite mcp serve
-sellaite dashboard serve
+claude mcp add sellaite -- sellaite mcp serve-mcp
+sellaite dashboard start-dashboard
 ```
 
 The Nix package supplies sway, grim, wayvnc and noVNC. Install any
@@ -36,7 +36,7 @@ operation asks for approval, review the highlighted target and choose
 when you are done.
 
 To try sellaite without installing it, use `nix run
-github:conao3/rust-sellaite -- mcp serve` as the MCP server command. See
+github:conao3/rust-sellaite -- mcp serve-mcp` as the MCP server command. See
 [Use with Claude Code / Codex](#use-with-claude-code--codex) for configuration
 examples.
 
@@ -96,17 +96,17 @@ through a short-lived decision file in the private runtime directory.
 ## Dashboard
 
 ```sh
-nix run github:conao3/rust-sellaite -- dashboard serve
+nix run github:conao3/rust-sellaite -- dashboard start-dashboard
 ```
 
-The dashboard listens on `http://127.0.0.1:8730/` (`--address` changes it) and prints its URL as `{"Url": ...}`. It lists the desktops that running `sellaite mcp serve` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode, so watching the page sends no input to the desktop.
+The dashboard listens on `http://127.0.0.1:8730/` (`--address` changes it) and prints its URL as `{"Url": ...}`. It lists the desktops that running `sellaite mcp serve-mcp` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode, so watching the page sends no input to the desktop.
 
 - **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
 - **Take over** pauses agent input and enables browser input. **Give back** disables browser input, resumes the agent, and queues a screenshot reminder.
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
 - Any input on your seat (`seat0`), for example from a VNC client connected to the desktop's `VncSocket`, also pauses the agent. sellaite watches `seat0` with ext-idle-notify-v1 (500 ms timeout); the agent's own input is on the `agent` seat and does not pause it.
 
-The dashboard serves noVNC from `--novnc-dir` (or `SELLAITE_NOVNC_DIR`; the Nix package sets it) and proxies the browser's WebSocket to the desktop's wayvnc unix socket. It answers only requests whose `Host` is `localhost`, `127.0.0.1`, `[::1]` or the address it listens on, and it accepts Stop, Resume, notes and the VNC WebSocket only from its own page (`Origin`).
+The dashboard serves noVNC from `--novnc-dir` (or `SELLAITE_NOVNC_DIR`; the Nix package sets it) and proxies the browser's WebSocket to the desktop's wayvnc unix socket. It answers only requests whose `Host` is `localhost`, `127.0.0.1`, `[::1]` or the address it listens on, and it accepts GraphQL requests and the VNC WebSocket only from its own page (`Origin`).
 
 ### Notes from the command line
 
@@ -124,14 +124,14 @@ Put the dashboard behind [`tailscale serve`](https://tailscale.com/kb/1312/serve
 
 ```sh
 tailscale serve --bg --https=8731 http://127.0.0.1:8730
-sellaite dashboard serve \
+sellaite dashboard start-dashboard \
   --public-origins https://<machine>.<tailnet>.ts.net:8731 \
   --allowed-logins you@example.com
 ```
 
 `--public-origins` adds the origins the proxy serves the dashboard under: their `Host` and `Origin` are accepted next to the loopback ones, and the output lists them as `PublicUrls`. It needs `--allowed-logins`, which makes every request (the page, the desktop list, noVNC, Stop, Resume and the VNC WebSocket) carry a [`Tailscale-User-Login`](https://tailscale.com/kb/1312/serve#identity-headers) header naming one of the logins; any other request gets 403, including one sent to the loopback address without the header. `tailscale serve` sets the header from the tailnet identity of the requesting machine and replaces a value the client sends, so the dashboard must listen only on loopback (the default) for the check to mean anything. Requests from tagged machines carry no login and are refused.
 
-`sellaite mcp serve` removes, when it starts, the runtime directories (`/tmp/sel.*`) that killed runs left behind.
+`sellaite mcp serve-mcp` removes, when it starts, the runtime directories (`/tmp/sel.*`) that killed runs left behind.
 
 ## Use with Claude Code / Codex
 
@@ -140,7 +140,7 @@ The client needs no shell tool: it opens applications with `launch`. Run the cli
 Claude Code:
 
 ```sh
-claude mcp add sellaite -- nix run github:conao3/rust-sellaite -- mcp serve
+claude mcp add sellaite -- nix run github:conao3/rust-sellaite -- mcp serve-mcp
 ```
 
 For a headless run, pass the server in a config file and allow only its tools:
@@ -150,7 +150,7 @@ For a headless run, pass the server in a config file and allow only its tools:
   "mcpServers": {
     "sellaite": {
       "command": "nix",
-      "args": ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve"]
+      "args": ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve-mcp"]
     }
   }
 }
@@ -166,10 +166,27 @@ Codex (`~/.codex/config.toml`):
 ```toml
 [mcp_servers.sellaite]
 command = "nix"
-args = ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve"]
+args = ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve-mcp"]
 ```
 
 The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05.
+
+## Dashboard API
+
+Send GraphQL queries and mutations to `POST /api/graphql` with the dashboard's
+origin. The API exposes desktop status, pause and resume, takeover and give-back,
+notes, and approval decisions. See [schema.graphql](schema.graphql) for the types.
+Regenerate it after changing a resolver or type:
+
+```sh
+cargo run --quiet -- schema get-sdl --output text > schema.graphql
+```
+
+CLI commands use named parameters and default to PascalCase JSON output.
+Use `--output text` or `--output table` for readable command results.
+The dashboard prints its startup record as JSON and MCP uses its stdio protocol.
+Run `sellaite help`, `sellaite desktop help`, or
+`sellaite desktop list-desktops help` to see command usage.
 
 ## Development
 

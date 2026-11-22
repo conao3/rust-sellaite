@@ -73,22 +73,19 @@ fn the_public_origin_needs_an_allowed_tailscale_login() {
     let origin = ("Origin", PUBLIC_ORIGIN);
 
     assert_eq!(dashboard.status("GET", "/", &[public, owner]), 200);
-    assert_eq!(
-        dashboard.status("GET", "/api/desktops", &[public, owner]),
-        200
-    );
+    assert_eq!(dashboard.status("GET", "/health", &[public, owner]), 204);
     assert_eq!(dashboard.status("GET", "/", &[public]), 403);
     assert_eq!(
         dashboard.status(
             "GET",
-            "/api/desktops",
+            "/health",
             &[public, ("Tailscale-User-Login", "someone@example.com")]
         ),
         403
     );
     let local = dashboard.address.clone();
     assert_eq!(
-        dashboard.status("GET", "/api/desktops", &[("Host", &local)]),
+        dashboard.status("GET", "/health", &[("Host", &local)]),
         403,
         "a loopback request without a login was served"
     );
@@ -97,21 +94,21 @@ fn the_public_origin_needs_an_allowed_tailscale_login() {
         403
     );
 
-    let stop = "/api/desktops/none/pause";
+    let stop = "/api/graphql";
     assert_eq!(dashboard.status("POST", stop, &[public, origin]), 403);
     assert_eq!(dashboard.status("POST", stop, &[public, owner]), 403);
     assert_eq!(
         dashboard.status(
             "POST",
-            "/api/desktops/none/resume",
+            "/api/graphql",
             &[public, owner, ("Origin", "https://evil.example")]
         ),
         403
     );
     assert_eq!(
         dashboard.status("POST", stop, &[public, owner, origin]),
-        404,
-        "an allowed Stop did not reach the desktop lookup"
+        415,
+        "an authorized request did not reach GraphQL body extraction"
     );
     assert_eq!(
         dashboard.status(

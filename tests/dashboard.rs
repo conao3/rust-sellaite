@@ -61,22 +61,46 @@ impl Dashboard {
         ))
     }
 
-    fn post(&self, path: &str, origin: &str) -> u16 {
-        self.send(&format!(
-            "POST {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {origin}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            self.host
-        ))
-        .0
-    }
-
-    fn post_json(&self, path: &str, origin: &str, body: &Value) -> (u16, Value) {
-        let body = body.to_string();
+    fn graphql(&self, origin: &str, query: &str, variables: Value) -> (u16, Value) {
+        let body = json!({"query": query, "variables": variables}).to_string();
         let (status, response) = self.send(&format!(
-            "POST {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST /api/graphql HTTP/1.1\r\nHost: {}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             self.host,
             body.len()
         ));
-        (status, serde_json::from_slice(&response).unwrap())
+        let result = if status == 200 {
+            serde_json::from_slice(&response).unwrap()
+        } else {
+            Value::Null
+        };
+        (status, result)
+    }
+
+    fn control(&self, action: &str, id: &str, origin: &str) -> (u16, Value) {
+        self.graphql(
+            origin,
+            &format!("mutation($id: String!) {{ {action}(id: $id) {{ id }} }}"),
+            json!({"id": id}),
+        )
+    }
+
+    fn note(&self, id: &str, origin: &str, text: &str) -> (u16, Value) {
+        self.graphql(
+            origin,
+            "mutation($id: String!, $text: String!) { createNote(id: $id, text: $text) { PendingNotes: pendingNotes } }",
+            json!({"id": id, "text": text}),
+        )
+    }
+
+    fn decide(&self, id: &str, request: &str, origin: &str, decision: &Value) -> (u16, Value) {
+        self.graphql(
+            origin,
+            "mutation($id: String!, $request: String!, $decision: ApprovalDecision!) { decideApproval(id: $id, requestId: $request, decision: $decision) }",
+            json!({"id": id, "request": request, "decision": {
+                "action": decision["Action"].as_str().unwrap().to_uppercase(),
+                "x": decision["X"], "y": decision["Y"], "text": decision["Text"],
+            }}),
+        )
     }
 
     fn origin(&self) -> String {
@@ -84,10 +108,9 @@ impl Dashboard {
     }
 
     fn desktop(&self, id: &str) -> Option<Value> {
-        let (status, body) = self.get("/api/desktops");
+        let (status, list) = self.graphql(&self.origin(), "{ desktops { Id: id Paused: paused PausedReason: pausedReason UserSeatIdle: userSeatIdle TakingOver: takingOver PendingNotes: pendingNotes PendingApproval: pendingApproval { Id: id Tool: tool } } }", json!({}));
         assert_eq!(status, 200);
-        let list: Value = serde_json::from_slice(&body).unwrap();
-        list["Desktops"]
+        list["data"]["desktops"]
             .as_array()
             .unwrap()
             .iter()
@@ -206,7 +229,7 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     assert_eq!(dashboard.get("/novnc/core/rfb.js").0, 200);
     assert_eq!(dashboard.get("/novnc/../sellaite.json").0, 404);
     let forged = dashboard.send(&format!(
-        "GET /api/desktops HTTP/1.1\r\nHost: evil.example:{}\r\nConnection: close\r\n\r\n",
+        "GET /health HTTP/1.1\r\nHost: evil.example:{}\r\nConnection: close\r\n\r\n",
         dashboard.host.rsplit(':').next().unwrap()
     ));
     assert_eq!(forged.0, 403, "a request with a foreign Host was served");
@@ -261,15 +284,28 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     let shot = mcp.call("screenshot", json!({}));
     assert_eq!(shot["content"][0]["type"], "image");
 
-    let resume = format!("/api/desktops/{id}/resume");
-    let pause = format!("/api/desktops/{id}/pause");
-    assert_eq!(dashboard.post(&resume, "http://evil.example"), 403);
+    assert_eq!(
+        dashboard
+            .control("resumeDesktop", &id, "http://evil.example")
+            .0,
+        403
+    );
     assert_eq!(dashboard.desktop(&id).unwrap()["Paused"], true);
-    assert_eq!(dashboard.post(&resume, &dashboard.origin()), 200);
+    assert_eq!(
+        dashboard
+            .control("resumeDesktop", &id, &dashboard.origin())
+            .1["data"]["resumeDesktop"]["id"],
+        id
+    );
     assert_eq!(dashboard.desktop(&id).unwrap()["Paused"], false);
     mcp.call("click", json!({"x": 400, "y": 300}));
 
-    assert_eq!(dashboard.post(&pause, &dashboard.origin()), 200);
+    assert_eq!(
+        dashboard
+            .control("pauseDesktop", &id, &dashboard.origin())
+            .1["data"]["pauseDesktop"]["id"],
+        id
+    );
     let result = mcp.request(
         "tools/call",
         json!({"name": "click", "arguments": {"x": 1, "y": 1}}),
@@ -282,7 +318,12 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
             .contains("dashboard"),
         "{result}"
     );
-    assert_eq!(dashboard.post(&resume, &dashboard.origin()), 200);
+    assert_eq!(
+        dashboard
+            .control("resumeDesktop", &id, &dashboard.origin())
+            .1["data"]["resumeDesktop"]["id"],
+        id
+    );
     mcp.call("type", json!({"text": "again"}));
     drop(vnc);
 
@@ -303,7 +344,10 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        accepted |= line.trim() == "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
+        accepted |= line.trim().split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("Sec-WebSocket-Accept")
+                && value.trim() == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        });
         if line.trim().is_empty() {
             break;
         }
@@ -316,6 +360,15 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     assert_eq!(&frame[2..], b"RFB 003.008\n");
     drop(reader);
     drop(ws);
+
+    let (_, takeover) = dashboard.control("takeOverDesktop", &id, &dashboard.origin());
+    assert_eq!(takeover["data"]["takeOverDesktop"]["id"], id);
+    assert_eq!(dashboard.desktop(&id).unwrap()["TakingOver"], true);
+    let (_, resume) = dashboard.control("resumeDesktop", &id, &dashboard.origin());
+    assert!(resume["errors"].is_array(), "{resume}");
+    let (_, give_back) = dashboard.control("giveBackDesktop", &id, &dashboard.origin());
+    assert_eq!(give_back["data"]["giveBackDesktop"]["id"], id);
+    assert_eq!(dashboard.desktop(&id).unwrap()["TakingOver"], false);
 
     mcp.call("stop_desktop", json!({}));
     assert!(
@@ -373,19 +426,16 @@ fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
     std::fs::write(&file, "from a file\n").unwrap();
     assert_eq!(create_note(&id, &format!("file://{}", file.display())).0, 0);
     std::fs::remove_file(&file).unwrap();
-    let notes = format!("/api/desktops/{id}/notes");
-    let (status, desktop) = dashboard.post_json(
-        &notes,
-        &dashboard.origin(),
-        &json!({"Text": "from the dashboard"}),
-    );
-    assert_eq!(status, 200, "{desktop}");
-    assert_eq!(desktop["PendingNotes"], 3, "{desktop}");
-    let (status, _) =
-        dashboard.post_json(&notes, "http://evil.example", &json!({"Text": "forged"}));
+    let (status, result) = dashboard.note(&id, &dashboard.origin(), "from the dashboard");
+    assert_eq!(status, 200, "{result}");
+    assert_eq!(result["data"]["createNote"]["PendingNotes"], 3, "{result}");
+    let (status, _) = dashboard.note(&id, "http://evil.example", "forged");
     assert_eq!(status, 403, "a note from a foreign Origin was accepted");
-    let (status, _) = dashboard.post_json(&notes, &dashboard.origin(), &json!({"Text": "  "}));
-    assert_eq!(status, 400, "an empty note was accepted");
+    let (_, result) = dashboard.note(&id, &dashboard.origin(), "  ");
+    assert!(
+        result["errors"].is_array(),
+        "an empty note was accepted: {result}"
+    );
     assert_eq!(create_note(&id, "").0, 252);
     assert_eq!(create_note("Zz9999", "to nobody").0, 254);
     assert_eq!(dashboard.desktop(&id).unwrap()["PendingNotes"], 3);
@@ -407,8 +457,12 @@ fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
     let again = first.call("wait", json!({"milliseconds": 0}));
     assert!(notes_in(&again).is_empty(), "a note arrived twice: {again}");
 
-    let pause = format!("/api/desktops/{id}/pause");
-    assert_eq!(dashboard.post(&pause, &dashboard.origin()), 200);
+    assert_eq!(
+        dashboard
+            .control("pauseDesktop", &id, &dashboard.origin())
+            .1["data"]["pauseDesktop"]["id"],
+        id
+    );
     assert_eq!(create_note(&id, "while paused").0, 0);
     let refused = first.request(
         "tools/call",
@@ -417,8 +471,10 @@ fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
     assert!(is_error(&refused), "{refused}");
     assert_eq!(notes_in(&refused), ["while paused"], "{refused}");
     assert_eq!(
-        dashboard.post(&format!("/api/desktops/{id}/resume"), &dashboard.origin()),
-        200
+        dashboard
+            .control("resumeDesktop", &id, &dashboard.origin())
+            .1["data"]["resumeDesktop"]["id"],
+        id
     );
 
     assert_eq!(create_note(&id, "before a screenshot").0, 0);
@@ -484,19 +540,17 @@ fn risky_input_waits_for_the_matching_dashboard_decision() {
             approval.is_object().then_some(approval)
         });
         assert_eq!(pending["Tool"], "click");
-        let path = format!(
-            "/api/desktops/{id}/approval/{}",
-            pending["Id"].as_str().unwrap()
-        );
+        let request_id = pending["Id"].as_str().unwrap();
         assert_eq!(
             dashboard
-                .post_json(&path, "https://foreign.invalid", &decision)
+                .decide(id, request_id, "https://foreign.invalid", &decision)
                 .0,
             403
         );
-        let stale = format!("/api/desktops/{id}/approval/stale");
-        assert_eq!(dashboard.post_json(&stale, &origin, &decision).0, 409);
-        assert_eq!(dashboard.post_json(&path, &origin, &decision).0, 200);
+        let (_, stale) = dashboard.decide(id, "0", &origin, &decision);
+        assert!(stale["errors"].is_array(), "{stale}");
+        let (_, result) = dashboard.decide(id, request_id, &origin, &decision);
+        assert_eq!(result["data"]["decideApproval"], true, "{result}");
         let result = mcp.read_result(request);
         assert_eq!(result["content"][0]["text"], expected);
         assert!(dashboard.desktop(id).unwrap()["PendingApproval"].is_null());
@@ -512,16 +566,13 @@ fn risky_input_waits_for_the_matching_dashboard_decision() {
         approval.is_object().then_some(approval)
     });
     assert!(!pending.to_string().contains("private placeholder"));
-    let path = format!(
-        "/api/desktops/{id}/approval/{}",
-        pending["Id"].as_str().unwrap()
+    let (_, result) = dashboard.decide(
+        id,
+        pending["Id"].as_str().unwrap(),
+        &origin,
+        &json!({"Action": "edit", "Text": "edited"}),
     );
-    assert_eq!(
-        dashboard
-            .post_json(&path, &origin, &json!({"Action": "edit", "Text": "edited"}))
-            .0,
-        200
-    );
+    assert_eq!(result["data"]["decideApproval"], true, "{result}");
     assert_eq!(
         mcp.read_result(request)["content"][0]["text"],
         "typed 6 characters"

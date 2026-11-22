@@ -6,6 +6,7 @@ check:
 	lake -d audit build --wfail
 	git diff --exit-code -- .leanfran lean
 	test -z "$$(git ls-files --others --exclude-standard -- .leanfran lean)"
+	cargo run --quiet -- schema get-sdl --output text | diff -u schema.graphql -
 	cargo test
 
 .PHONY: format

@@ -346,6 +346,28 @@ function renderApproval(desktop) {
   }
 }
 
+const desktopFields = `
+  Id: id Width: width Height: height Pid: pid Paused: paused TakingOver: takingOver
+  PausedReason: pausedReason UserSeatIdle: userSeatIdle PendingNotes: pendingNotes
+  PendingApproval: pendingApproval {
+    Id: id Tool: tool Reason: reason Domain: domain X: x Y: y
+    Target: target { Role: role Name: name }
+    Bounds: bounds { X: x Y: y Width: width Height: height }
+  }
+`;
+
+async function graphql(query, variables = {}) {
+  const response = await fetch("/api/graphql", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({query, variables}),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const result = await response.json();
+  if (result.errors?.length) throw new Error(result.errors[0].message);
+  return result.data;
+}
+
 async function decideApproval(decision) {
   const desktop = currentDesktop();
   if (!desktop?.PendingApproval || busy) return;
@@ -354,13 +376,13 @@ async function decideApproval(decision) {
   render();
   $("action-error").hidden = true;
   try {
-    const response = await fetch(`/api/desktops/${desktop.Id}/approval/${id}`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(decision),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.Error);
+    await graphql(`
+      mutation($id: String!, $request: String!, $decision: ApprovalDecision!) {
+        decideApproval(id: $id, requestId: $request, decision: $decision)
+      }
+    `, {id: desktop.Id, request: id, decision: {
+      action: decision.Action.toUpperCase(), x: decision.X, y: decision.Y, text: decision.Text,
+    }});
     $("approval-edit").hidden = true;
   } catch (error) {
     $("action-error").textContent = error.message;
@@ -419,13 +441,11 @@ async function sendNote() {
   render();
   $("note-error").hidden = true;
   try {
-    const response = await fetch(`/api/desktops/${id}/notes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ Text: text.value }),
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.Error || `HTTP ${response.status}`);
+    const {createNote: body} = await graphql(`
+      mutation($id: String!, $text: String!) {
+        createNote(id: $id, text: $text) { ${desktopFields} }
+      }
+    `, {id, text: text.value});
     desktops = desktops.map((d) => (d.Id === id ? body : d));
     if (shownDraft === id) text.value = "";
     drafts.delete(id);
@@ -440,9 +460,7 @@ async function sendNote() {
 
 async function refresh() {
   try {
-    const response = await fetch("/api/desktops", { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    desktops = (await response.json()).Desktops;
+    ({desktops} = await graphql(`{ desktops { ${desktopFields} } }`));
     loaded = true;
     render();
   } catch (e) {
@@ -457,9 +475,13 @@ async function act(action) {
   render();
   $("action-error").hidden = true;
   try {
-    const response = await fetch(`/api/desktops/${id}/${action}`, { method: "POST" });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.Error || `HTTP ${response.status}`);
+    const field = {
+      pause: "pauseDesktop", resume: "resumeDesktop",
+      "take-over": "takeOverDesktop", "give-back": "giveBackDesktop",
+    }[action];
+    const {desktop: body} = await graphql(`
+      mutation($id: String!) { desktop: ${field}(id: $id) { ${desktopFields} } }
+    `, {id});
     if (action === "take-over") takeoverId = id;
     desktops = desktops.map((d) => (d.Id === id ? body : d));
   } catch (e) {

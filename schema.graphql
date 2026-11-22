@@ -1,0 +1,74 @@
+type Approval {
+	id: String!
+	tool: String!
+	reason: String!
+	domain: String
+	target: Target!
+	bounds: Bounds!
+	x: Int
+	y: Int
+}
+
+enum ApprovalAction {
+	APPROVE
+	REJECT
+	EDIT
+}
+
+input ApprovalDecision {
+	action: ApprovalAction!
+	x: Int
+	y: Int
+	text: String
+}
+
+type Bounds {
+	x: Int!
+	y: Int!
+	width: Int!
+	height: Int!
+}
+
+type Desktop {
+	id: String!
+	width: Int
+	height: Int
+	pid: Int
+	paused: Boolean!
+	takingOver: Boolean!
+	pausedReason: String
+	userSeatIdle: Boolean!
+	pendingApproval: Approval
+	pendingNotes: Int!
+}
+
+type Mutation {
+	pauseDesktop(id: String!): Desktop!
+	resumeDesktop(id: String!): Desktop!
+	takeOverDesktop(id: String!): Desktop!
+	giveBackDesktop(id: String!): Desktop!
+	createNote(id: String!, text: String!): Desktop!
+	decideApproval(id: String!, requestId: String!, decision: ApprovalDecision!): Boolean!
+}
+
+type Query {
+	desktops: [Desktop!]!
+}
+
+type Target {
+	role: String!
+	name: String!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+	mutation: Mutation
+}

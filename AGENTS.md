@@ -124,15 +124,13 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
 - `runtime::remove_stale` (run when `mcp serve` starts) removes a directory
   whose `sellaite.json` names a dead process, or that has no `sellaite.json`,
   is older than 60 s and has no Wayland socket that accepts a connection.
-- `src/dashboard.rs` is a std-only HTTP server: `GET /`
-  (`src/dashboard.html`), `GET /api/desktops`, `POST
-  /api/desktops/<Id>/{pause,resume}`, `POST /api/desktops/<Id>/notes`
-  (JSON `{"Text": ...}`, at most 16 KiB), the WebSocket `GET
-  /api/desktops/<Id>/vnc`, and noVNC under `/novnc/`. `Config::authorize`
-  checks every request: `Host` against the loopback names, the listening
-  address and the hosts of `--public-origins`; with `--allowed-logins`, the
-  `Tailscale-User-Login` header against the list; and `Origin` against the
-  origin of that `Host` on the POSTs and the WebSocket.
+- `src/dashboard.rs` serves the dashboard, noVNC static files, the VNC
+  WebSocket, and `GET /health` with axum. Its single API, `POST /api/graphql`,
+  serves desktop queries and control, note and approval mutations from
+  `src/graphql.rs`. Every request checks Host and any configured Tailscale
+  login. GraphQL requests and the WebSocket also require a matching Origin.
+  Export the schema with `cargo run --quiet -- schema get-sdl --output text`.
+  `make check` verifies the export against `schema.graphql`.
 
 ## Conventions
 
@@ -182,13 +180,13 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   second call gets none, a refused (paused) `click`, a `screenshot` and
   `stop_desktop` carry the notes sent before them, a `launch` result with
   notes has no `structuredContent`, and a foreign `Origin`,
-  an empty note and an unknown Id are refused (403, 400 and 252, 254). It
+  an empty note and an unknown Id are refused (403, a GraphQL error, and CLI exit codes 252 and 254). It
   fails when a taken note is not removed, when error results get no notes, and
   when `stop_desktop` does not take the notes before the desktop stops.
 - `tests/dashboard_access.rs` needs no desktop: it checks that with
   `--public-origins` and `--allowed-logins` a request without an allowed
   `Tailscale-User-Login`, from a foreign `Host` or with a foreign `Origin` gets
-  403 (loopback included), that an allowed Stop reaches the desktop lookup, and
+  403 (loopback included), that an authorized GraphQL request reaches body extraction, and
   that `--public-origins` without `--allowed-logins` is a usage error. It fails
   when the login check is removed.
 - The flake uses `sway-unwrapped`: the nixpkgs `sway` wrapper starts
