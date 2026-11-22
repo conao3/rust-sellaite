@@ -179,6 +179,23 @@ The runtime directory holds the pending request metadata while the call waits.
 The original text stays in MCP memory. A dashboard text replacement passes
 through a short-lived decision file in the private runtime directory.
 
+### Limits in interactive apps
+
+- Approval compares screenshots of the whole desktop. A blinking text caret,
+  animation, or update in another window can invalidate an approved click.
+  Take a fresh screenshot and retry after the screen settles. Moving focus
+  out of an editable field can stop its caret from blinking.
+- Automatic targeting requires a working AT-SPI2 bus and an application that
+  exposes the relevant controls. Firefox can leave its accessibility tree
+  disabled until accessibility is enabled in the desktop session. A Wayland
+  application may expose a focused field while its button coordinates remain
+  unavailable, and a window behind the active app can make the click target
+  ambiguous. Declare the intent for sensitive actions even when accessibility
+  is enabled.
+- `launch` with `wait_for_window` waits for the first window to map. An
+  immediate screenshot can still be blank, and a multi-window app can open
+  more windows afterwards. Check the displayed windows before sending input.
+
 ## Dashboard
 
 ```sh
@@ -192,7 +209,7 @@ For an always-on dashboard, pass `--token-file /path/to/dashboard-token` in an e
 - **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
 - **Take over** pauses agent input and grants control to the current tab. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, resumes the agent, and queues a screenshot reminder.
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
-- Any input on your seat (`seat0`), for example from a VNC client connected to the desktop's `VncSocket`, also pauses the agent. sellaite watches `seat0` with ext-idle-notify-v1 (500 ms timeout); the agent's own input is on the `agent` seat and does not pause it.
+- Input on your seat (`seat0`) pauses the agent when it follows at least 500 ms of inactivity. Continuous input can leave the agent running after **Resume**. Wait at least 500 ms after your last input on that seat before pressing **Resume**. The agent's own input uses its separate seat.
 
 The dashboard serves noVNC from `--novnc-dir`, `SELLAITE_NOVNC_DIR` or `/usr/share/novnc`, in that order, and proxies the browser's WebSocket to the desktop's wayvnc unix socket. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
 
