@@ -102,7 +102,7 @@ nix run github:conao3/rust-sellaite -- dashboard start-dashboard
 The dashboard listens on `http://127.0.0.1:8730/` (`--address` changes it) and prints its URL as `{"Url": ...}`. It lists the desktops that running `sellaite mcp serve-mcp` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode, so watching the page sends no input to the desktop.
 
 - **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
-- **Take over** pauses agent input and enables browser input. **Give back** disables browser input, resumes the agent, and queues a screenshot reminder.
+- **Take over** pauses agent input and grants control to the current tab. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, resumes the agent, and queues a screenshot reminder.
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
 - Any input on your seat (`seat0`), for example from a VNC client connected to the desktop's `VncSocket`, also pauses the agent. sellaite watches `seat0` with ext-idle-notify-v1 (500 ms timeout); the agent's own input is on the `agent` seat and does not pause it.
 

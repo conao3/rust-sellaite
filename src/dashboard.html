@@ -211,7 +211,8 @@ let rfb = null;
 let connectedId = null;
 let busy = false;
 let sending = false;
-let takeoverId = null;
+let connection = null;
+let ready = false;
 let shownDraft = null;
 const drafts = new Map();
 
@@ -234,20 +235,30 @@ function connect(id) {
   connectedId = id;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   $("connection").textContent = "Connecting…";
-  rfb = new RFB($("screen"), `${scheme}://${location.host}/api/desktops/${id}/vnc`);
+  connection = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte =>
+    byte.toString(16).padStart(2, "0")).join("");
+  const client = new RFB($("screen"), `${scheme}://${location.host}/api/desktops/${id}/vnc?connection=${connection}`);
+  rfb = client;
   rfb.viewOnly = true;
   rfb.scaleViewport = true;
   rfb.focusOnClick = false;
   rfb.addEventListener("connect", () => {
+    if (rfb !== client) return;
+    ready = true;
     $("connection").textContent = "Connected.";
+    refresh();
   });
   rfb.addEventListener("disconnect", (e) => {
+    if (rfb !== client) return;
+    disconnect();
     $("connection").textContent = e.detail.clean ? "Disconnected." : "The connection to the desktop was lost.";
-    if (connectedId === id) { rfb = null; connectedId = null; }
+    render();
   });
 }
 
 function disconnect() {
+  ready = false;
+  connection = null;
   if (rfb) {
     const old = rfb;
     rfb = null;
@@ -303,11 +314,11 @@ function render() {
   renderCompose(desktop);
   connect(desktop.Id);
   renderApproval(desktop);
-  if (!desktop.TakingOver && takeoverId === desktop.Id) takeoverId = null;
-  $("takeover").disabled = busy;
-  $("takeover").textContent = desktop.TakingOver ? "Give back" : "Take over";
+  const input = ready && desktop.OwnsTakeover && !busy;
+  $("takeover").disabled = busy || !ready || (desktop.TakingOver && !desktop.OwnsTakeover);
+  $("takeover").textContent = desktop.OwnsTakeover ? "Give back"
+    : desktop.TakingOver ? "Another tab has control" : "Take over";
   if (rfb) {
-    const input = desktop.TakingOver && takeoverId === desktop.Id;
     rfb.viewOnly = !input;
     rfb.focusOnClick = input;
   }
@@ -347,7 +358,7 @@ function renderApproval(desktop) {
 }
 
 const desktopFields = `
-  Id: id Width: width Height: height Pid: pid Paused: paused TakingOver: takingOver
+  Id: id Width: width Height: height Pid: pid Paused: paused TakingOver: takingOver OwnsTakeover: ownsTakeover
   PausedReason: pausedReason UserSeatIdle: userSeatIdle PendingNotes: pendingNotes
   PendingApproval: pendingApproval {
     Id: id Tool: tool Reason: reason Domain: domain X: x Y: y
@@ -359,7 +370,7 @@ const desktopFields = `
 async function graphql(query, variables = {}) {
   const response = await fetch("/api/graphql", {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: {"Content-Type": "application/json", "X-Sellaite-Connection": connection ?? ""},
     body: JSON.stringify({query, variables}),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -460,7 +471,10 @@ async function sendNote() {
 
 async function refresh() {
   try {
-    ({desktops} = await graphql(`{ desktops { ${desktopFields} } }`));
+    const viewer = connection;
+    const result = await graphql(`{ desktops { ${desktopFields} } }`);
+    if (viewer !== connection || busy) return;
+    desktops = result.desktops;
     loaded = true;
     render();
   } catch (e) {
@@ -470,7 +484,7 @@ async function refresh() {
 
 async function act(action) {
   const id = selectedId();
-  if (action === "give-back") takeoverId = null;
+  const viewer = connection;
   busy = true;
   render();
   $("action-error").hidden = true;
@@ -482,7 +496,7 @@ async function act(action) {
     const {desktop: body} = await graphql(`
       mutation($id: String!) { desktop: ${field}(id: $id) { ${desktopFields} } }
     `, {id});
-    if (action === "take-over") takeoverId = id;
+    if (viewer !== connection) return;
     desktops = desktops.map((d) => (d.Id === id ? body : d));
   } catch (e) {
     $("action-error").textContent = `Could not ${action.replace("-", " ")}: ${e.message}`;
@@ -490,6 +504,7 @@ async function act(action) {
   } finally {
     busy = false;
     render();
+    refresh();
   }
 }
 

@@ -40,6 +40,7 @@ type Desktop {
 	userSeatIdle: Boolean!
 	pendingApproval: Approval
 	pendingNotes: Int!
+	ownsTakeover: Boolean!
 }
 
 type Mutation {

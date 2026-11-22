@@ -1,11 +1,13 @@
+use std::collections::HashMap;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_graphql_axum::GraphQLResponse;
 use axum::extract::{
-    DefaultBodyLimit, Path as RoutePath, Request, State, WebSocketUpgrade, ws::Message,
+    DefaultBodyLimit, Path as RoutePath, Query, Request, State, WebSocketUpgrade, ws::Message,
 };
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -15,6 +17,7 @@ use axum::{Json, Router};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixStream};
+use tokio::sync::{Mutex, Notify};
 
 use crate::{graphql, runtime};
 
@@ -26,8 +29,51 @@ struct Site {
     origin: String,
 }
 
+#[derive(Default)]
+pub(crate) struct Control {
+    connections: HashMap<String, (String, Arc<Notify>, bool)>,
+    owners: HashMap<String, String>,
+}
+
+impl Control {
+    pub(crate) fn owns(&self, id: &str, connection: &str) -> bool {
+        self.owners.get(id).is_some_and(|owner| owner == connection)
+    }
+
+    pub(crate) fn take(&mut self, id: &str, dir: &Path, connection: &str) -> Result<(), String> {
+        if !self
+            .connections
+            .get(connection)
+            .is_some_and(|(desktop, _, retired)| desktop == id && !retired)
+        {
+            return Err("no live VNC connection for this desktop".into());
+        }
+        if self.owners.contains_key(id) {
+            return Err("another connection already controls this desktop".into());
+        }
+        runtime::take_over(dir)?;
+        self.owners.insert(id.to_owned(), connection.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn release(&mut self, id: &str, dir: &Path, connection: &str) -> Result<(), String> {
+        if !self.owns(id, connection) {
+            return Err("this connection does not control the desktop".into());
+        }
+        self.owners.remove(id);
+        if let Some((_, close, retired)) = self.connections.get_mut(connection) {
+            *retired = true;
+            close.notify_one();
+        }
+        runtime::give_back(dir)
+    }
+}
+
+pub(crate) type SharedControl = Arc<Mutex<Control>>;
+
 struct Config {
     schema: graphql::DashboardSchema,
+    control: SharedControl,
     novnc_dir: PathBuf,
     sites: Vec<Site>,
     allowed_logins: Option<Vec<String>>,
@@ -127,8 +173,10 @@ pub async fn serve(
     let public_urls: Vec<String> = public_origins.iter().map(|o| format!("{o}/")).collect();
     println!("{}", json!({"Url": url, "PublicUrls": public_urls}));
     std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let control = SharedControl::default();
     let config = Arc::new(Config {
-        schema: graphql::schema(),
+        schema: graphql::schema_with_control(control.clone()),
+        control,
         novnc_dir,
         sites,
         allowed_logins,
@@ -180,9 +228,18 @@ async fn authorize_request(
 
 async fn execute_graphql(
     State(config): State<Arc<Config>>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<async_graphql::Request>,
 ) -> GraphQLResponse {
-    config.schema.execute(request).await.into()
+    let connection = headers
+        .get("x-sellaite-connection")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    config
+        .schema
+        .execute(request.data(graphql::Connection(connection.to_owned())))
+        .await
+        .into()
 }
 
 fn content_type(path: &Path) -> &'static str {
@@ -221,25 +278,68 @@ async fn serve_file(
     Ok(([(header::CONTENT_TYPE, content_type(&path))], bytes))
 }
 
+#[derive(serde::Deserialize)]
+struct VncQuery {
+    connection: String,
+}
+
 async fn vnc(
+    State(config): State<Arc<Config>>,
     RoutePath(id): RoutePath<String>,
+    Query(VncQuery { connection }): Query<VncQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, StatusCode> {
+    if connection.len() != 32 || !connection.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let dir = runtime::live_dir(&id).ok_or(StatusCode::NOT_FOUND)?;
     let vnc = UnixStream::connect(dir.join(runtime::VNC_SOCKET))
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(upgrade.protocols(["binary"]).max_message_size(1 << 20).on_upgrade(move |mut browser| async move {
+        let close = Arc::new(Notify::new());
+        {
+            let mut control = config.control.lock().await;
+            let std::collections::hash_map::Entry::Vacant(entry) =
+                control.connections.entry(connection.clone())
+            else {
+                return;
+            };
+            entry.insert((id.clone(), close.clone(), false));
+        }
         let (mut incoming, mut outgoing) = vnc.into_split();
         let mut buffer = vec![0; 64 * 1024];
-        loop {
+        let mut pending = Vec::new();
+        let mut handshake = 0;
+        'proxy: loop {
             tokio::select! {
+                _ = close.notified() => break,
                 frame = browser.recv() => {
                     match frame {
                         Some(Ok(Message::Binary(data))) => {
-                            if outgoing.write_all(&data).await.is_err() {
-                                break;
+                            pending.extend_from_slice(&data);
+                            let mut remaining = pending.as_slice();
+                            while !remaining.is_empty() {
+                                let (size, input) = match client_message(remaining, handshake) {
+                                    Ok(Some(message)) => message,
+                                    Ok(None) => break,
+                                    Err(()) => break 'proxy,
+                                };
+                                if remaining.len() < size { break; }
+                                let control = config.control.lock().await;
+                                if control.connections[&connection].2 {
+                                    break 'proxy;
+                                }
+                                if (!input || control.owns(&id, &connection))
+                                    && !matches!(tokio::time::timeout(Duration::from_secs(2), outgoing.write_all(&remaining[..size])).await, Ok(Ok(())))
+                                {
+                                    break 'proxy;
+                                }
+                                handshake = (handshake + 1).min(3);
+                                remaining = &remaining[size..];
                             }
+                            let consumed = pending.len() - remaining.len();
+                            pending.drain(..consumed);
                         }
                         Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                         _ => {}
@@ -247,13 +347,60 @@ async fn vnc(
                 }
                 result = incoming.read(&mut buffer) => {
                     let Ok(size) = result else { break };
-                    if size == 0 || browser.send(Message::Binary(buffer[..size].to_vec().into())).await.is_err() {
+                    if size == 0 || !matches!(tokio::time::timeout(Duration::from_secs(2), browser.send(Message::Binary(buffer[..size].to_vec().into()))).await, Ok(Ok(()))) {
                         break;
                     }
                 }
             }
         }
+        drop(outgoing);
+        drop(incoming);
+        let mut control = config.control.lock().await;
+        if control.owns(&id, &connection)
+            && let Err(error) = control.release(&id, &dir, &connection)
+        {
+            eprintln!("{error}");
+        }
+        control.connections.remove(&connection);
     }))
+}
+
+fn client_message(bytes: &[u8], handshake: u8) -> Result<Option<(usize, bool)>, ()> {
+    if handshake < 3 {
+        return match handshake {
+            0 if b"RFB 003.008\n".starts_with(&bytes[..bytes.len().min(12)]) => {
+                Ok(Some((12, false)))
+            }
+            1 | 2 if bytes[0] == 1 => Ok(Some((1, false))),
+            _ => Err(()),
+        };
+    }
+    let message = match bytes[0] {
+        0 => (20, false),
+        2 if bytes.len() >= 4 => (
+            4 + 4 * usize::from(u16::from_be_bytes([bytes[2], bytes[3]])),
+            false,
+        ),
+        3 | 150 => (10, false),
+        4 => (8, true),
+        5 if bytes.len() >= 2 => (if bytes[1] & 0x80 == 0 { 6 } else { 7 }, true),
+        6 if bytes.len() >= 8 => {
+            let len = i32::from_be_bytes(bytes[4..8].try_into().unwrap()).unsigned_abs() as usize;
+            if len > 1 << 20 {
+                return Err(());
+            }
+            (8 + len, true)
+        }
+        248 if bytes.len() >= 9 && bytes[8] <= 64 => (9 + usize::from(bytes[8]), false),
+        248 if bytes.len() >= 9 => return Err(()),
+        250 => (4, true),
+        251 if bytes.len() >= 8 => (8 + 16 * usize::from(bytes[6]), true),
+        255 if bytes.len() >= 2 && bytes[1] == 0 => (12, true),
+        255 if bytes.len() >= 2 => return Err(()),
+        2 | 5 | 6 | 248 | 251 | 255 => return Ok(None),
+        _ => return Err(()),
+    };
+    Ok(Some(message))
 }
 
 #[cfg(test)]
@@ -263,6 +410,7 @@ mod tests {
     fn config(allowed_logins: Option<Vec<String>>) -> Config {
         Config {
             schema: graphql::schema(),
+            control: SharedControl::default(),
             novnc_dir: PathBuf::new(),
             sites: vec![
                 Site {

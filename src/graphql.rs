@@ -1,17 +1,25 @@
 use std::path::PathBuf;
 
 use async_graphql::{
-    EmptySubscription, Enum, Error, InputObject, Object, Result, Schema, SimpleObject,
+    ComplexObject, Context, EmptySubscription, Enum, Error, InputObject, Object, Result, Schema,
+    SimpleObject,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::runtime;
+use crate::{dashboard::SharedControl, runtime};
+
+pub(crate) struct Connection(pub String);
 
 pub type DashboardSchema = Schema<Query, Mutation, EmptySubscription>;
 
 pub fn schema() -> DashboardSchema {
+    schema_with_control(SharedControl::default())
+}
+
+pub(crate) fn schema_with_control(control: SharedControl) -> DashboardSchema {
     Schema::build(Query, Mutation, EmptySubscription)
+        .data(control)
         .limit_depth(12)
         .limit_complexity(200)
         .finish()
@@ -19,6 +27,7 @@ pub fn schema() -> DashboardSchema {
 
 #[derive(Serialize, SimpleObject)]
 #[serde(rename_all = "PascalCase")]
+#[graphql(complex)]
 pub struct Desktop {
     id: String,
     width: Option<u32>,
@@ -88,6 +97,19 @@ impl Desktop {
     }
 }
 
+#[ComplexObject]
+impl Desktop {
+    async fn owns_takeover(&self, ctx: &Context<'_>) -> bool {
+        let Some(connection) = ctx.data_opt::<Connection>() else {
+            return false;
+        };
+        ctx.data_unchecked::<SharedControl>()
+            .lock()
+            .await
+            .owns(&self.id, &connection.0)
+    }
+}
+
 pub struct Query;
 
 #[Object]
@@ -129,8 +151,9 @@ impl Mutation {
         Ok(Desktop::read(&id, &dir))
     }
 
-    async fn resume_desktop(&self, id: String) -> Result<Desktop> {
+    async fn resume_desktop(&self, ctx: &Context<'_>, id: String) -> Result<Desktop> {
         let dir = desktop_dir(&id)?;
+        let _control = ctx.data_unchecked::<SharedControl>().lock().await;
         if runtime::taking_over(&dir) {
             return Err(Error::new("desktop takeover state changed"));
         }
@@ -138,18 +161,23 @@ impl Mutation {
         Ok(Desktop::read(&id, &dir))
     }
 
-    async fn take_over_desktop(&self, id: String) -> Result<Desktop> {
+    async fn take_over_desktop(&self, ctx: &Context<'_>, id: String) -> Result<Desktop> {
         let dir = desktop_dir(&id)?;
-        runtime::take_over(&dir)?;
+        let connection = ctx.data::<Connection>()?;
+        ctx.data_unchecked::<SharedControl>()
+            .lock()
+            .await
+            .take(&id, &dir, &connection.0)?;
         Ok(Desktop::read(&id, &dir))
     }
 
-    async fn give_back_desktop(&self, id: String) -> Result<Desktop> {
+    async fn give_back_desktop(&self, ctx: &Context<'_>, id: String) -> Result<Desktop> {
         let dir = desktop_dir(&id)?;
-        if !runtime::taking_over(&dir) {
-            return Err(Error::new("desktop takeover state changed"));
-        }
-        runtime::give_back(&dir)?;
+        let connection = ctx.data::<Connection>()?;
+        ctx.data_unchecked::<SharedControl>()
+            .lock()
+            .await
+            .release(&id, &dir, &connection.0)?;
         Ok(Desktop::read(&id, &dir))
     }
 

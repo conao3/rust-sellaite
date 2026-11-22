@@ -126,6 +126,63 @@ impl Drop for Dashboard {
     }
 }
 
+fn dashboard_vnc(dashboard: &Dashboard, id: &str, connection: &str) -> BufReader<TcpStream> {
+    let key = base64::engine::general_purpose::STANDARD.encode(b"the sample nonce");
+    let mut ws = TcpStream::connect(&dashboard.host).unwrap();
+    write!(
+        ws,
+        "GET /api/desktops/{id}/vnc?connection={connection} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        dashboard.host,
+        dashboard.origin()
+    )
+    .unwrap();
+    ws.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let mut reader = BufReader::new(ws);
+    let mut status = String::new();
+    reader.read_line(&mut status).unwrap();
+    assert!(status.starts_with("HTTP/1.1 101"), "{status}");
+    let mut accepted = false;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        accepted |= line.trim().split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("Sec-WebSocket-Accept")
+                && value.trim() == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        });
+        if line.trim().is_empty() {
+            break;
+        }
+    }
+    assert!(accepted);
+    let mut frame = [0u8; 14];
+    reader.read_exact(&mut frame).unwrap();
+    assert_eq!(frame[0], 0x82);
+    assert_eq!(frame[1], 12);
+    assert_eq!(&frame[2..], b"RFB 003.008\n");
+    send_vnc(reader.get_mut(), b"RFB 003.008\n");
+    send_vnc(reader.get_mut(), &[1]);
+    send_vnc(reader.get_mut(), &[1]);
+    reader
+}
+
+fn send_vnc(stream: &mut TcpStream, data: &[u8]) {
+    let key = [1, 2, 3, 4];
+    let mut frame = vec![0x82, 0x80 | u8::try_from(data.len()).unwrap()];
+    frame.extend(key);
+    frame.extend(data.iter().enumerate().map(|(i, byte)| byte ^ key[i % 4]));
+    stream.write_all(&frame).unwrap();
+}
+
+fn takeover(dashboard: &Dashboard, id: &str, action: &str, connection: &str) -> Value {
+    let body = json!({"query": format!("mutation($id: String!) {{ {action}(id: $id) {{ id ownsTakeover }} }}"), "variables": {"id": id}}).to_string();
+    let (status, response) = dashboard.send(&format!(
+        "POST /api/graphql HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nX-Sellaite-Connection: {connection}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        dashboard.host, dashboard.origin(), body.len()
+    ));
+    assert_eq!(status, 200);
+    serde_json::from_slice(&response).unwrap()
+}
+
 fn vnc_client(socket: &Path) -> UnixStream {
     let mut vnc = UnixStream::connect(socket).expect("connect to wayvnc");
     let mut version = [0u8; 12];
@@ -327,48 +384,65 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     mcp.call("type", json!({"text": "again"}));
     drop(vnc);
 
-    let key = base64::engine::general_purpose::STANDARD.encode(b"the sample nonce");
-    let mut ws = TcpStream::connect(&dashboard.host).unwrap();
-    write!(
-        ws,
-        "GET /api/desktops/{id}/vnc HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n",
-        dashboard.host,
-        dashboard.origin()
-    )
-    .unwrap();
-    let mut reader = BufReader::new(ws.try_clone().unwrap());
-    let mut status = String::new();
-    reader.read_line(&mut status).unwrap();
-    assert!(status.starts_with("HTTP/1.1 101"), "{status}");
-    let mut accepted = false;
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        accepted |= line.trim().split_once(':').is_some_and(|(name, value)| {
-            name.eq_ignore_ascii_case("Sec-WebSocket-Accept")
-                && value.trim() == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
-        });
-        if line.trim().is_empty() {
-            break;
-        }
-    }
-    assert!(accepted);
-    let mut frame = [0u8; 14];
-    reader.read_exact(&mut frame).unwrap();
-    assert_eq!(frame[0], 0x82);
-    assert_eq!(frame[1], 12);
-    assert_eq!(&frame[2..], b"RFB 003.008\n");
-    drop(reader);
-    drop(ws);
+    let connection_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let connection_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let mut tab_a = dashboard_vnc(&dashboard, &id, connection_a);
+    let mut tab_b = dashboard_vnc(&dashboard, &id, connection_b);
 
-    let (_, takeover) = dashboard.control("takeOverDesktop", &id, &dashboard.origin());
-    assert_eq!(takeover["data"]["takeOverDesktop"]["id"], id);
-    assert_eq!(dashboard.desktop(&id).unwrap()["TakingOver"], true);
-    let (_, resume) = dashboard.control("resumeDesktop", &id, &dashboard.origin());
-    assert!(resume["errors"].is_array(), "{resume}");
-    let (_, give_back) = dashboard.control("giveBackDesktop", &id, &dashboard.origin());
-    assert_eq!(give_back["data"]["giveBackDesktop"]["id"], id);
+    let taken = takeover(&dashboard, &id, "takeOverDesktop", connection_a);
+    assert_eq!(
+        taken["data"]["takeOverDesktop"]["ownsTakeover"], true,
+        "{taken}"
+    );
+    assert!(takeover(&dashboard, &id, "takeOverDesktop", connection_b)["errors"].is_array());
+    assert!(takeover(&dashboard, &id, "giveBackDesktop", connection_b)["errors"].is_array());
+    assert!(
+        dashboard
+            .control("resumeDesktop", &id, &dashboard.origin())
+            .1["errors"]
+            .is_array()
+    );
+    let idle = || dashboard.desktop(&id).unwrap()["UserSeatIdle"] == true;
+    wait_for("idle user seat", || idle().then_some(()));
+    send_vnc(tab_b.get_mut(), &[5, 0, 0, 25, 0, 25]);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(idle(), "the spectator's pointer reached seat0");
+    send_vnc(tab_a.get_mut(), &[5, 0, 0, 50, 0, 50]);
+    wait_for("owner pointer", || (!idle()).then_some(()));
+    wait_for("idle user seat", || idle().then_some(()));
+
+    let returned = takeover(&dashboard, &id, "giveBackDesktop", connection_a);
+    assert_eq!(
+        returned["data"]["giveBackDesktop"]["ownsTakeover"], false,
+        "{returned}"
+    );
     assert_eq!(dashboard.desktop(&id).unwrap()["TakingOver"], false);
+    send_vnc(tab_b.get_mut(), &[5, 0, 0, 75, 0, 75]);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(idle(), "a pointer reached seat0 after Give back");
+    drop(tab_a);
+    let result = mcp.request("tools/call", json!({"name": "screenshot", "arguments": {}}));
+    assert!(
+        notes_in(&result)
+            .iter()
+            .any(|note| note.contains("Take a screenshot"))
+    );
+
+    let taken = takeover(&dashboard, &id, "takeOverDesktop", connection_b);
+    assert_eq!(
+        taken["data"]["takeOverDesktop"]["ownsTakeover"], true,
+        "{taken}"
+    );
+    drop(tab_b);
+    wait_for("disconnect releases takeover", || {
+        (dashboard.desktop(&id).unwrap()["TakingOver"] == false).then_some(())
+    });
+    let result = mcp.request("tools/call", json!({"name": "screenshot", "arguments": {}}));
+    assert!(
+        notes_in(&result)
+            .iter()
+            .any(|note| note.contains("Take a screenshot"))
+    );
 
     mcp.call("stop_desktop", json!({}));
     assert!(
