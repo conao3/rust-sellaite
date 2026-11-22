@@ -54,6 +54,19 @@ The dashboard listens on `http://127.0.0.1:8730/` (`--address` changes it) and p
 
 The dashboard serves noVNC from `--novnc-dir` (or `SELLAITE_NOVNC_DIR`; the Nix package sets it) and proxies the browser's WebSocket to the desktop's wayvnc unix socket. It answers only requests whose `Host` is `localhost`, `127.0.0.1`, `[::1]` or the address it listens on, and it accepts Stop, Resume and the VNC WebSocket only from its own page (`Origin`).
 
+### Watching from another machine on the tailnet
+
+Put the dashboard behind [`tailscale serve`](https://tailscale.com/kb/1312/serve) on its own HTTPS port and name the logins that may use it:
+
+```sh
+tailscale serve --bg --https=8731 http://127.0.0.1:8730
+sellaite dashboard serve \
+  --public-origins https://<machine>.<tailnet>.ts.net:8731 \
+  --allowed-logins you@example.com
+```
+
+`--public-origins` adds the origins the proxy serves the dashboard under: their `Host` and `Origin` are accepted next to the loopback ones, and the output lists them as `PublicUrls`. It needs `--allowed-logins`, which makes every request (the page, the desktop list, noVNC, Stop, Resume and the VNC WebSocket) carry a [`Tailscale-User-Login`](https://tailscale.com/kb/1312/serve#identity-headers) header naming one of the logins; any other request gets 403, including one sent to the loopback address without the header. `tailscale serve` sets the header from the tailnet identity of the requesting machine and replaces a value the client sends, so the dashboard must listen only on loopback (the default) for the check to mean anything. Requests from tagged machines carry no login and are refused.
+
 `sellaite mcp serve` removes, when it starts, the runtime directories (`/tmp/sel.*`) that killed runs left behind.
 
 ## Use with Claude Code / Codex

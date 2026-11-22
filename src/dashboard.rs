@@ -34,12 +34,64 @@ impl Request {
     }
 }
 
-struct Config {
-    novnc_dir: PathBuf,
-    allowed_hosts: Vec<String>,
+const LOGIN_HEADER: &str = "Tailscale-User-Login";
+
+struct Site {
+    host: String,
+    origin: String,
 }
 
-pub fn serve(address: SocketAddr, novnc_dir: &Path) -> Result<(), String> {
+struct Config {
+    novnc_dir: PathBuf,
+    sites: Vec<Site>,
+    allowed_logins: Option<Vec<String>>,
+}
+
+impl Config {
+    fn authorize(
+        &self,
+        host: Option<&str>,
+        origin: Option<&str>,
+        login: Option<&str>,
+        needs_origin: bool,
+    ) -> Result<(), &'static str> {
+        let site = self
+            .sites
+            .iter()
+            .find(|s| Some(s.host.as_str()) == host)
+            .ok_or("unexpected Host header")?;
+        if let Some(logins) = &self.allowed_logins
+            && !login.is_some_and(|l| logins.iter().any(|a| a == l))
+        {
+            return Err("the request has no allowed Tailscale identity");
+        }
+        if needs_origin && origin != Some(site.origin.as_str()) {
+            return Err("cross-origin request");
+        }
+        Ok(())
+    }
+}
+
+pub fn parse_origin(text: &str) -> Result<String, String> {
+    let text = text.strip_suffix('/').unwrap_or(text);
+    let authority = text
+        .strip_prefix("https://")
+        .or_else(|| text.strip_prefix("http://"))
+        .ok_or_else(|| format!("{text} does not start with https:// or http://"))?;
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
+        return Err(format!(
+            "{text} is not an origin (a scheme and a host with an optional port)"
+        ));
+    }
+    Ok(text.to_ascii_lowercase())
+}
+
+pub fn serve(
+    address: SocketAddr,
+    novnc_dir: &Path,
+    public_origins: &[String],
+    allowed_logins: Option<Vec<String>>,
+) -> Result<(), String> {
     let novnc_dir = novnc_dir.canonicalize().map_err(|e| {
         format!(
             "cannot open the noVNC directory {}: {e}",
@@ -68,11 +120,29 @@ pub fn serve(address: SocketAddr, novnc_dir: &Path) -> Result<(), String> {
         "http://{}/",
         allowed_hosts.last().unwrap_or(&allowed_hosts[1])
     );
-    println!("{}", json!({"Url": url}));
+    let mut sites: Vec<Site> = allowed_hosts
+        .into_iter()
+        .map(|host| Site {
+            origin: format!("http://{host}"),
+            host,
+        })
+        .collect();
+    sites.extend(public_origins.iter().map(|origin| {
+        Site {
+            host: origin
+                .split_once("://")
+                .map_or(origin.as_str(), |(_, a)| a)
+                .to_string(),
+            origin: origin.clone(),
+        }
+    }));
+    let public_urls: Vec<String> = public_origins.iter().map(|o| format!("{o}/")).collect();
+    println!("{}", json!({"Url": url, "PublicUrls": public_urls}));
     std::io::stdout().flush().map_err(|e| e.to_string())?;
     let config = Arc::new(Config {
         novnc_dir,
-        allowed_hosts,
+        sites,
+        allowed_logins,
     });
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
@@ -145,13 +215,22 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
         respond_error(&mut stream, "400 Bad Request", "malformed request");
         return Ok(());
     };
-    let host = request.header("Host").unwrap_or("");
-    if !config.allowed_hosts.iter().any(|h| h == host) {
-        respond_error(&mut stream, "403 Forbidden", "unexpected Host header");
+    let segments: Vec<&str> = request.path.trim_start_matches('/').split('/').collect();
+    let needs_origin = matches!(
+        (request.method.as_str(), segments.as_slice()),
+        ("POST", ["api", "desktops", ..]) | ("GET", ["api", "desktops", _, "vnc"])
+    );
+    let host = request.header("Host").map(str::to_ascii_lowercase);
+    let origin = request.header("Origin").map(str::to_ascii_lowercase);
+    if let Err(e) = config.authorize(
+        host.as_deref(),
+        origin.as_deref(),
+        request.header(LOGIN_HEADER),
+        needs_origin,
+    ) {
+        respond_error(&mut stream, "403 Forbidden", e);
         return Ok(());
     }
-    let same_origin = request.header("Origin") == Some(format!("http://{host}").as_str());
-    let segments: Vec<&str> = request.path.trim_start_matches('/').split('/').collect();
     match (request.method.as_str(), segments.as_slice()) {
         ("GET", [""]) => respond(
             &mut stream,
@@ -161,10 +240,6 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
         ),
         ("GET", ["api", "desktops"]) => respond_json(&mut stream, "200 OK", &desktops()),
         ("POST", ["api", "desktops", id, action @ ("pause" | "resume")]) => {
-            if !same_origin {
-                respond_error(&mut stream, "403 Forbidden", "cross-origin request");
-                return Ok(());
-            }
             let Some(dir) = live_dir(id) else {
                 respond_error(&mut stream, "404 Not Found", "no such desktop");
                 return Ok(());
@@ -180,10 +255,6 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
             }
         }
         ("GET", ["api", "desktops", id, "vnc"]) => {
-            if !same_origin {
-                respond_error(&mut stream, "403 Forbidden", "cross-origin request");
-                return Ok(());
-            }
             let Some(dir) = live_dir(id) else {
                 respond_error(&mut stream, "404 Not Found", "no such desktop");
                 return Ok(());
@@ -381,6 +452,82 @@ fn proxy_vnc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config(allowed_logins: Option<Vec<String>>) -> Config {
+        Config {
+            novnc_dir: PathBuf::new(),
+            sites: vec![
+                Site {
+                    host: "127.0.0.1:8730".into(),
+                    origin: "http://127.0.0.1:8730".into(),
+                },
+                Site {
+                    host: "box.example.ts.net:8731".into(),
+                    origin: "https://box.example.ts.net:8731".into(),
+                },
+            ],
+            allowed_logins,
+        }
+    }
+
+    #[test]
+    fn authorizes_by_host_login_and_origin() {
+        let open = config(None);
+        assert!(
+            open.authorize(Some("127.0.0.1:8730"), None, None, false)
+                .is_ok()
+        );
+        assert!(
+            open.authorize(Some("evil:8730"), None, None, false)
+                .is_err()
+        );
+        assert!(open.authorize(None, None, None, false).is_err());
+        let guarded = config(Some(vec!["me@example.com".into()]));
+        let public = Some("box.example.ts.net:8731");
+        let origin = Some("https://box.example.ts.net:8731");
+        assert!(guarded.authorize(public, None, None, false).is_err());
+        assert!(
+            guarded
+                .authorize(public, None, Some("other@example.com"), false)
+                .is_err()
+        );
+        assert!(
+            guarded
+                .authorize(public, None, Some("me@example.com"), false)
+                .is_ok()
+        );
+        assert!(
+            guarded
+                .authorize(public, origin, Some("me@example.com"), true)
+                .is_ok()
+        );
+        assert!(
+            guarded
+                .authorize(
+                    public,
+                    Some("http://127.0.0.1:8730"),
+                    Some("me@example.com"),
+                    true
+                )
+                .is_err()
+        );
+        assert!(
+            guarded
+                .authorize(public, None, Some("me@example.com"), true)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_an_origin() {
+        assert_eq!(
+            parse_origin("https://Box.example.ts.net:8731/").unwrap(),
+            "https://box.example.ts.net:8731"
+        );
+        assert!(parse_origin("box.example.ts.net").is_err());
+        assert!(parse_origin("https://box.example.ts.net/dashboard").is_err());
+        assert!(parse_origin("https://").is_err());
+    }
 
     #[test]
     fn accepts_the_rfc6455_sample_key() {

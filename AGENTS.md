@@ -118,9 +118,11 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
 - `src/dashboard.rs` is a std-only HTTP server: `GET /`
   (`src/dashboard.html`), `GET /api/desktops`, `POST
   /api/desktops/<Id>/{pause,resume}`, the WebSocket `GET
-  /api/desktops/<Id>/vnc`, and noVNC under `/novnc/`. It checks `Host`
-  against the loopback names and the listening address, and `Origin` on the
-  POSTs and the WebSocket.
+  /api/desktops/<Id>/vnc`, and noVNC under `/novnc/`. `Config::authorize`
+  checks every request: `Host` against the loopback names, the listening
+  address and the hosts of `--public-origins`; with `--allowed-logins`, the
+  `Tailscale-User-Login` header against the list; and `Origin` against the
+  origin of that `Host` on the POSTs and the WebSocket.
 
 ## Conventions
 
@@ -163,5 +165,11 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   `seat0`, when the watcher is bound to `agent`, and when the pause check is
   removed. `nix build` runs it too, so `nativeCheckInputs` carries `wayvnc`
   and the build sets `SELLAITE_NOVNC_DIR`.
+- `tests/dashboard_access.rs` needs no desktop: it checks that with
+  `--public-origins` and `--allowed-logins` a request without an allowed
+  `Tailscale-User-Login`, from a foreign `Host` or with a foreign `Origin` gets
+  403 (loopback included), that an allowed Stop reaches the desktop lookup, and
+  that `--public-origins` without `--allowed-logins` is a usage error. It fails
+  when the login check is removed.
 - The flake uses `sway-unwrapped`: the nixpkgs `sway` wrapper starts
   `dbus-run-session`, which fails where no D-Bus daemon is installed.
