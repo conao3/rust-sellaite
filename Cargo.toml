@@ -2,9 +2,14 @@
 name = "sellaite"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.89"
 license = "Apache-2.0"
 description = "A desktop and an input seat of its own for an AI computer-use agent"
+readme = "README.md"
 repository = "https://github.com/conao3/rust-sellaite"
+homepage = "https://github.com/conao3/rust-sellaite"
+keywords = ["mcp", "wayland", "sway", "computer-use", "automation"]
+categories = ["command-line-utilities", "gui"]
 
 [dependencies]
 async-graphql = { version = "7", default-features = false }

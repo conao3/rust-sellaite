@@ -45,9 +45,9 @@ To try sellaite without installing it, use `nix run github:conao3/rust-sellaite 
 
 ### With Cargo
 
-Install Cargo, Rust and a system linker, then install the runtime dependencies
-for your distribution. Run sellaite as an ordinary user. The headless sway
-session needs neither a display server nor a GPU.
+Install Cargo, Rust 1.89 or later and a system linker, then install the runtime
+dependencies for your distribution. Run sellaite as an ordinary user. The
+headless sway session needs neither a display server nor a GPU.
 
 On Ubuntu 26.04 LTS, enable the `universe` repository for the desktop packages:
 
@@ -64,14 +64,20 @@ sudo pacman -Syu --needed gcc rust ca-certificates curl git sway grim wayvnc cor
   python at-spi2-core dbus foot ttf-dejavu
 ```
 
-Install from GitHub with the checked-in generated Rust sources:
+Install a published release from crates.io:
 
 ```sh
-LEANFRAN_OFFLINE=1 cargo install --locked --git https://github.com/conao3/rust-sellaite
-export PATH="$HOME/.cargo/bin:$PATH"
+cargo install --locked sellaite
 ```
 
-From a source checkout, run `LEANFRAN_OFFLINE=1 cargo install --locked --path .`.
+To install the current development version from GitHub:
+
+```sh
+cargo install --locked --git https://github.com/conao3/rust-sellaite
+```
+
+From a source checkout, run `cargo install --locked --path .`. Add Cargo's
+binary directory (usually `$HOME/.cargo/bin`) to your `PATH`.
 
 | Runtime dependency | Purpose |
 | --- | --- |
