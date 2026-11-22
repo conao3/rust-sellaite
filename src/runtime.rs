@@ -331,12 +331,26 @@ pub fn remove_stale() -> Vec<PathBuf> {
         .into_iter()
         .filter(|dir| !is_live(dir))
         .filter(|dir| {
-            let Ok(lock) = fs::File::open(dir) else {
+            let Some(_lock) = lock_stale_dir(dir) else {
                 return false;
             };
-            lock.try_lock().is_ok() && !is_live(dir) && reap_dir(dir).is_ok()
+            dir.is_dir() && !is_live(dir) && reap_dir(dir).is_ok()
         })
         .collect()
+}
+
+fn lock_stale_dir(dir: &Path) -> Option<fs::File> {
+    let lock = fs::File::open(dir).ok()?;
+    let deadline = Instant::now() + REAP_TIMEOUT;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Some(lock),
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn reap_dir(dir: &Path) -> Result<(), String> {

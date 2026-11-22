@@ -255,6 +255,8 @@ fn mcp_startup_cleans_up_marked_processes_from_a_stale_desktop() {
         .unwrap();
     let id = dir.path().file_name().unwrap().to_str().unwrap();
     let id = id.strip_prefix("sel.").unwrap();
+    let lock = std::fs::File::open(dir.path()).unwrap();
+    lock.lock().unwrap();
     let mut process = Command::new("sleep")
         .arg("600")
         .env("SELLAITE_DESKTOP", id)
@@ -267,15 +269,11 @@ fn mcp_startup_cleans_up_marked_processes_from_a_stale_desktop() {
     )
     .unwrap();
 
-    let _mcp = Mcp::spawn();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        let status = process.try_wait().unwrap();
-        if (status.is_some() && !dir.path().exists()) || Instant::now() >= deadline {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let startup = std::thread::spawn(Mcp::spawn);
+    std::thread::sleep(Duration::from_millis(300));
+    drop(lock);
+    let _mcp = startup.join().unwrap();
+    let status = process.try_wait().unwrap();
     if status.is_none() {
         process.kill().unwrap();
         process.wait().unwrap();
