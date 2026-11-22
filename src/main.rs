@@ -1,8 +1,11 @@
 mod chord;
+mod dashboard;
 mod desktop;
+mod idle;
 mod input;
 mod keymap;
 mod mcp;
+mod runtime;
 
 use clap::{Parser, Subcommand};
 
@@ -19,6 +22,24 @@ enum Command {
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
+    },
+    /// The browser dashboard that shows the desktops and pauses their agents
+    Dashboard {
+        #[command(subcommand)]
+        command: DashboardCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum DashboardCommand {
+    /// Serve the dashboard over HTTP
+    Serve {
+        /// Address to listen on
+        #[arg(long, default_value = "127.0.0.1:8730")]
+        address: std::net::SocketAddr,
+        /// noVNC's directory (the one that holds core/rfb.js)
+        #[arg(long, env = "SELLAITE_NOVNC_DIR")]
+        novnc_dir: std::path::PathBuf,
     },
 }
 
@@ -41,9 +62,23 @@ fn main() {
         Command::Mcp {
             command: McpCommand::Serve,
         } => {
+            for dir in runtime::remove_stale() {
+                eprintln!(
+                    "sellaite: removed the stale runtime directory {}",
+                    dir.display()
+                );
+            }
             let stdin = std::io::stdin().lock();
             let stdout = std::io::stdout().lock();
             if let Err(e) = mcp::Server::default().serve(stdin, stdout) {
+                eprintln!("sellaite: {e}");
+                std::process::exit(EXIT_FAILURE);
+            }
+        }
+        Command::Dashboard {
+            command: DashboardCommand::Serve { address, novnc_dir },
+        } => {
+            if let Err(e) = dashboard::serve(address, &novnc_dir) {
                 eprintln!("sellaite: {e}");
                 std::process::exit(EXIT_FAILURE);
             }

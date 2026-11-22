@@ -20,7 +20,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "start_desktop",
-            "description": "Start the agent's own headless desktop (sway) with an agent seat and a user seat. The agent's clicks and keystrokes go only to the agent seat. The result gives WAYLAND_DISPLAY, XDG_RUNTIME_DIR and SWAYSOCK for launching applications inside the desktop.",
+            "description": "Start the agent's own headless desktop (sway) with an agent seat and a user seat. The agent's clicks and keystrokes go only to the agent seat. The user watches the desktop in the sellaite dashboard and can pause the agent; while it is paused, click, type and key return an error. The result gives WAYLAND_DISPLAY, XDG_RUNTIME_DIR and SWAYSOCK for launching applications inside the desktop.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -102,6 +102,16 @@ impl Server {
             .ok_or_else(|| "no desktop is running; call start_desktop first".to_string())
     }
 
+    fn input_desktop(&mut self) -> Result<&mut Desktop, String> {
+        let desktop = self.desktop()?;
+        match desktop.paused() {
+            Some(reason) => Err(format!(
+                "the user paused the agent ({reason}); do not retry until the user resumes it from the sellaite dashboard"
+            )),
+            None => Ok(desktop),
+        }
+    }
+
     fn call(&mut self, name: &str, args: &Value) -> Result<Value, String> {
         match name {
             "start_desktop" => {
@@ -114,11 +124,13 @@ impl Server {
                 let info = desktop.info();
                 self.desktop = Some(desktop);
                 let body = json!({
+                    "Id": info.id,
                     "Width": info.width,
                     "Height": info.height,
                     "XdgRuntimeDir": info.runtime_dir,
                     "WaylandDisplay": info.wayland_display,
                     "Swaysock": info.swaysock,
+                    "VncSocket": info.vnc_socket,
                 });
                 let mut result = text_result(body.to_string());
                 result["structuredContent"] = body;
@@ -147,7 +159,7 @@ impl Server {
                     None => Button::Left,
                     Some(name) => Button::parse(name)?,
                 };
-                self.desktop()?.click(x, y, button)?;
+                self.input_desktop()?.click(x, y, button)?;
                 Ok(text_result(format!("clicked at ({x}, {y})")))
             }
             "type" => {
@@ -155,7 +167,7 @@ impl Server {
                     .get("text")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "text must be a string".to_string())?;
-                self.desktop()?.type_text(text)?;
+                self.input_desktop()?.type_text(text)?;
                 Ok(text_result(format!(
                     "typed {} characters",
                     text.chars().count()
@@ -167,7 +179,7 @@ impl Server {
                     .and_then(Value::as_str)
                     .ok_or_else(|| "keys must be a string".to_string())?;
                 let chord = chord::parse(keys)?;
-                self.desktop()?.key(&chord)?;
+                self.input_desktop()?.key(&chord)?;
                 Ok(text_result(format!("pressed {keys}")))
             }
             other => Err(format!("unknown tool {other:?}")),

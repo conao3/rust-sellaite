@@ -1,13 +1,13 @@
-use std::ffi::CString;
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::chord::Chord;
+use crate::idle;
 use crate::input::{Button, SeatInput};
+use crate::runtime;
 
 pub const AGENT_SEAT: &str = "agent";
 
@@ -18,6 +18,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct Desktop {
     runtime_dir: PathBuf,
     sway: Child,
+    wayvnc: Option<Child>,
+    watcher: Option<idle::Watcher>,
     wayland_display: String,
     swaysock: PathBuf,
     width: u32,
@@ -26,32 +28,13 @@ pub struct Desktop {
 }
 
 pub struct Info {
+    pub id: String,
     pub runtime_dir: PathBuf,
     pub wayland_display: String,
     pub swaysock: PathBuf,
+    pub vnc_socket: PathBuf,
     pub width: u32,
     pub height: u32,
-}
-
-fn short_temp_root() -> PathBuf {
-    let tmp = Path::new("/tmp");
-    if tmp.is_dir() {
-        tmp.to_path_buf()
-    } else {
-        std::env::temp_dir()
-    }
-}
-
-fn make_runtime_dir() -> Result<PathBuf, String> {
-    let template = short_temp_root().join("sel.XXXXXX");
-    let template = CString::new(template.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-    let raw = template.into_raw();
-    let made = unsafe { libc::mkdtemp(raw) };
-    let path = unsafe { CString::from_raw(raw) };
-    if made.is_null() {
-        return Err(format!("mkdtemp: {}", std::io::Error::last_os_error()));
-    }
-    Ok(PathBuf::from(std::ffi::OsStr::from_bytes(path.as_bytes())))
 }
 
 fn sway_config(width: u32, height: u32) -> String {
@@ -72,15 +55,46 @@ fn find_entry(dir: &Path, matches: impl Fn(&str) -> bool) -> Option<String> {
         .find(|name| matches(name))
 }
 
-fn is_wayland_socket(name: &str) -> bool {
-    name.strip_prefix("wayland-")
-        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-}
-
 fn log_tail(path: &Path) -> String {
     let log = fs::read_to_string(path).unwrap_or_default();
     let lines: Vec<&str> = log.lines().collect();
     lines[lines.len().saturating_sub(20)..].join("\n")
+}
+
+fn spawn_child(command: &mut Command, what: &str) -> Result<Child, String> {
+    unsafe {
+        command.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            if libc::getppid() == 1 {
+                libc::_exit(1);
+            }
+            Ok(())
+        });
+    }
+    command
+        .spawn()
+        .map_err(|e| format!("cannot start {what}: {e}"))
+}
+
+fn stop_child(child: &mut Child) {
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn runtime_state(width: u32, height: u32, wayland_display: Option<String>) -> runtime::State {
+    runtime::State {
+        pid: std::process::id(),
+        width,
+        height,
+        wayland_display,
+    }
 }
 
 impl Desktop {
@@ -88,14 +102,13 @@ impl Desktop {
         if width == 0 || height == 0 {
             return Err("width and height must be positive".to_string());
         }
-        let runtime_dir = make_runtime_dir()?;
-        match Self::start_in(runtime_dir.clone(), width, height) {
-            Ok(desktop) => Ok(desktop),
-            Err(e) => {
-                let _ = fs::remove_dir_all(&runtime_dir);
-                Err(e)
-            }
+        let runtime_dir = runtime::make_dir()?;
+        let started = runtime::write_state(&runtime_dir, &runtime_state(width, height, None))
+            .and_then(|()| Self::start_in(runtime_dir.clone(), width, height));
+        if started.is_err() {
+            let _ = fs::remove_dir_all(&runtime_dir);
         }
+        started
     }
 
     fn start_in(runtime_dir: PathBuf, width: u32, height: u32) -> Result<Self, String> {
@@ -117,18 +130,7 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
-        unsafe {
-            command.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                if libc::getppid() == 1 {
-                    libc::_exit(1);
-                }
-                Ok(())
-            });
-        }
-        let mut sway = command
-            .spawn()
-            .map_err(|e| format!("cannot start sway: {e}"))?;
+        let mut sway = spawn_child(&mut command, "sway")?;
         let deadline = Instant::now() + START_TIMEOUT;
         let (wayland_display, swaysock) = loop {
             if let Ok(Some(status)) = sway.try_wait() {
@@ -137,7 +139,7 @@ impl Desktop {
                     log_tail(&log_path)
                 ));
             }
-            let display = find_entry(&runtime_dir, is_wayland_socket);
+            let display = find_entry(&runtime_dir, runtime::is_wayland_socket);
             let sock = find_entry(&runtime_dir, |n| {
                 n.starts_with("sway-ipc.") && n.ends_with(".sock")
             });
@@ -145,8 +147,7 @@ impl Desktop {
                 break (display, runtime_dir.join(sock));
             }
             if Instant::now() > deadline {
-                let _ = sway.kill();
-                let _ = sway.wait();
+                stop_child(&mut sway);
                 return Err(format!(
                     "sway did not open its sockets within {}s:\n{}",
                     START_TIMEOUT.as_secs(),
@@ -155,38 +156,91 @@ impl Desktop {
             }
             std::thread::sleep(Duration::from_millis(50));
         };
-        let input = match SeatInput::connect(
+        let input = SeatInput::connect(
             &runtime_dir.join(&wayland_display),
             AGENT_SEAT,
             width,
             height,
-        ) {
-            Ok(input) => input,
-            Err(e) => {
-                let _ = sway.kill();
-                let _ = sway.wait();
-                return Err(e);
-            }
-        };
-        Ok(Self {
+        )
+        .inspect_err(|_| stop_child(&mut sway))?;
+        let mut desktop = Self {
             runtime_dir,
             sway,
+            wayvnc: None,
+            watcher: None,
             wayland_display,
             swaysock,
             width,
             height,
             input,
-        })
+        };
+        desktop.watch_user_seat()?;
+        runtime::write_state(
+            &desktop.runtime_dir,
+            &runtime_state(width, height, Some(desktop.wayland_display.clone())),
+        )?;
+        Ok(desktop)
+    }
+
+    fn watch_user_seat(&mut self) -> Result<(), String> {
+        self.watcher = Some(idle::watch(
+            &self.runtime_dir.join(&self.wayland_display),
+            USER_SEAT,
+            &self.runtime_dir,
+        )?);
+        let vnc_socket = self.runtime_dir.join(runtime::VNC_SOCKET);
+        let log_path = self.runtime_dir.join("wayvnc.log");
+        let log = fs::File::create(&log_path).map_err(|e| e.to_string())?;
+        let mut command = Command::new("wayvnc");
+        command
+            .args(["--unix-socket", "--seat", USER_SEAT])
+            .arg("--socket")
+            .arg(self.runtime_dir.join("wayvncctl"))
+            .arg(&vnc_socket)
+            .env("XDG_RUNTIME_DIR", &self.runtime_dir)
+            .env("WAYLAND_DISPLAY", &self.wayland_display)
+            .env_remove("DISPLAY")
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log);
+        let wayvnc = self.wayvnc.insert(spawn_child(&mut command, "wayvnc")?);
+        let deadline = Instant::now() + START_TIMEOUT;
+        while !vnc_socket.exists() {
+            if let Ok(Some(status)) = wayvnc.try_wait() {
+                return Err(format!(
+                    "wayvnc exited with {status}:\n{}",
+                    log_tail(&log_path)
+                ));
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "wayvnc did not open {} within {}s:\n{}",
+                    vnc_socket.display(),
+                    START_TIMEOUT.as_secs(),
+                    log_tail(&log_path)
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(())
     }
 
     pub fn info(&self) -> Info {
         Info {
+            id: runtime::id_of(&self.runtime_dir)
+                .unwrap_or_default()
+                .to_string(),
             runtime_dir: self.runtime_dir.clone(),
             wayland_display: self.wayland_display.clone(),
             swaysock: self.swaysock.clone(),
+            vnc_socket: self.runtime_dir.join(runtime::VNC_SOCKET),
             width: self.width,
             height: self.height,
         }
+    }
+
+    pub fn paused(&self) -> Option<String> {
+        runtime::paused(&self.runtime_dir)
     }
 
     pub fn click(&mut self, x: u32, y: u32, button: Button) -> Result<(), String> {
@@ -222,15 +276,11 @@ impl Desktop {
 
 impl Drop for Desktop {
     fn drop(&mut self) {
-        unsafe {
-            libc::kill(self.sway.id() as libc::pid_t, libc::SIGTERM);
+        self.watcher = None;
+        if let Some(wayvnc) = self.wayvnc.as_mut() {
+            stop_child(wayvnc);
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while matches!(self.sway.try_wait(), Ok(None)) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = self.sway.kill();
-        let _ = self.sway.wait();
+        stop_child(&mut self.sway);
         let _ = fs::remove_dir_all(&self.runtime_dir);
     }
 }

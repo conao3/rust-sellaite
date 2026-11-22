@@ -27,7 +27,9 @@
           desktopTools = [
             pkgs.sway-unwrapped
             pkgs.grim
+            pkgs.wayvnc
           ];
+          novncDir = "${pkgs.novnc}/share/webapps/novnc";
           fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
         in
         {
@@ -47,15 +49,10 @@
               pkgs.gnumake
               leanfran
             ]
-            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
-              desktopTools
-              ++ [
-                pkgs.wayvnc
-                pkgs.foot
-              ]
-            );
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (desktopTools ++ [ pkgs.foot ]);
             LEANFRAN_CLI = "${leanfran}/bin/leanfran";
             FONTCONFIG_FILE = fontsConf;
+            SELLAITE_NOVNC_DIR = novncDir;
           };
           packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             default = pkgs.rustPlatform.buildRustPackage {
@@ -67,7 +64,8 @@
               LEANFRAN_OFFLINE = "1";
               nativeCheckInputs = desktopTools ++ [ pkgs.foot ];
               FONTCONFIG_FILE = fontsConf;
-              postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools}";
+              SELLAITE_NOVNC_DIR = novncDir;
+              postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools} --set-default SELLAITE_NOVNC_DIR ${novncDir}";
               meta = {
                 description = "A desktop and an input seat of its own for an AI computer-use agent";
                 mainProgram = "sellaite";

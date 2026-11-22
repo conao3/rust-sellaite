@@ -7,8 +7,8 @@ user's cursor or focus. See `README.md` for the goal.
 ## Commands
 
 - `nix develop` — the development shell: the Rust toolchain, Lean and
-  leanfran, and the Wayland tools the desktop uses (`sway`, `grim`, `wayvnc`,
-  `foot`; Linux only).
+  leanfran, the Wayland tools the desktop uses (`sway`, `grim`, `wayvnc`,
+  `foot`; Linux only), and `SELLAITE_NOVNC_DIR` pointing at nixpkgs' noVNC.
 - `make check` — the single verification entry point: `nix fmt -- --ci`,
   `cargo clippy --all-targets -- -D warnings`, the Lean proofs
   (`lake -d lean build --wfail`), the theorem audit
@@ -30,8 +30,13 @@ user's cursor or focus. See `README.md` for the goal.
   `.leanfran/cache/` and the Lean package in `lean/`; commit both. The Nix
   build sets `LEANFRAN_OFFLINE=1` and uses the cache only.
 - Rust owns process management (sway, wayvnc), the Wayland protocol clients
-  (virtual pointer and keyboard, screen capture), the MCP server, and the CLI
-  (`clap`).
+  (virtual pointer and keyboard, screen capture, the ext-idle-notify-v1 watcher
+  of `seat0`), the MCP server, the dashboard (HTTP, the WebSocket proxy to
+  wayvnc), and the CLI (`clap`).
+- Pause is a file check, not a state machine: `src/runtime.rs` writes
+  `paused` (holding the reason) into the desktop's runtime directory, and the
+  MCP input tools refuse while it exists. It stays in Rust while it has no
+  transitions beyond set and clear.
 - Every generated function that Rust calls lands in the same change with a
   theorem about a property its callers rely on, and with a `#assay` line in
   `audit/`. `make check` runs `lake -d lean build --wfail`,
@@ -94,6 +99,27 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   `named_key`), and the rest of `keymap::chord_source`. The unit tests in `src/chord.rs`
   and `src/keymap.rs` and the headless sway test check them.
 
+## Desktops, the dashboard and pause
+
+- Each desktop is a runtime directory `/tmp/sel.<Id>` (`src/runtime.rs`)
+  holding sway's sockets, `sellaite.json` (the MCP server's `Pid`, the size and
+  `WaylandDisplay`), wayvnc's `vnc.sock`, and the files `paused` and
+  `user-idle`. `sellaite dashboard serve` finds desktops by scanning these
+  directories, so one dashboard serves every MCP server of the user.
+- `src/idle.rs` binds `ext_idle_notifier_v1` (version 2 uses
+  `get_input_idle_notification`) on `seat0` with a 500 ms timeout: `idled`
+  writes `user-idle`, `resumed` writes `paused`. Input within 500 ms of the
+  previous input on `seat0` raises no new `resumed`.
+- `runtime::remove_stale` (run when `mcp serve` starts) removes a directory
+  whose `sellaite.json` names a dead process, or that has no `sellaite.json`,
+  is older than 60 s and has no Wayland socket that accepts a connection.
+- `src/dashboard.rs` is a std-only HTTP server: `GET /`
+  (`src/dashboard.html`), `GET /api/desktops`, `POST
+  /api/desktops/<Id>/{pause,resume}`, the WebSocket `GET
+  /api/desktops/<Id>/vnc`, and noVNC under `/novnc/`. It checks `Host`
+  against the loopback names and the listening address, and `Origin` on the
+  POSTs and the WebSocket.
+
 ## Conventions
 
 - Edition 2024; `rustfmt.toml` pins `style_edition = "2024"`.
@@ -121,5 +147,14 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   only the agent seat's focus. `nix build`
   runs it in the sandbox, so `nativeCheckInputs` carries `sway-unwrapped`,
   `grim` and `foot`, and `FONTCONFIG_FILE` points at a fixed font set.
+- `tests/dashboard.rs` checks pause end to end: stale runtime directories
+  are removed when `mcp serve` starts, the agent's `click`, `type` and `key`
+  leave `seat0` idle, a raw RFB client on `vnc.sock` that only connects does
+  not pause, its pointer event pauses the agent, the input tools then return
+  the pause error, and the dashboard's Resume and Stop work (and refuse a
+  foreign `Origin` or `Host`). It fails when the agent's devices are bound to
+  `seat0`, when the watcher is bound to `agent`, and when the pause check is
+  removed. `nix build` runs it too, so `nativeCheckInputs` carries `wayvnc`
+  and the build sets `SELLAITE_NOVNC_DIR`.
 - The flake uses `sway-unwrapped`: the nixpkgs `sway` wrapper starts
   `dbus-run-session`, which fails where no D-Bus daemon is installed.

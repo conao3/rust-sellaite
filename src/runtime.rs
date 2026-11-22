@@ -1,0 +1,201 @@
+use std::ffi::CString;
+use std::fs;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use serde::{Deserialize, Serialize};
+
+const PREFIX: &str = "sel.";
+
+const STATE_FILE: &str = "sellaite.json";
+
+const PAUSED_FILE: &str = "paused";
+
+const USER_IDLE_FILE: &str = "user-idle";
+
+pub const VNC_SOCKET: &str = "vnc.sock";
+
+const STARTING_GRACE: Duration = Duration::from_secs(60);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub struct State {
+    pub pid: u32,
+    pub width: u32,
+    pub height: u32,
+    pub wayland_display: Option<String>,
+}
+
+pub fn temp_root() -> PathBuf {
+    let tmp = Path::new("/tmp");
+    if tmp.is_dir() {
+        tmp.to_path_buf()
+    } else {
+        std::env::temp_dir()
+    }
+}
+
+pub fn make_dir() -> Result<PathBuf, String> {
+    let template = temp_root().join(format!("{PREFIX}XXXXXX"));
+    let template = CString::new(template.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+    let raw = template.into_raw();
+    let made = unsafe { libc::mkdtemp(raw) };
+    let path = unsafe { CString::from_raw(raw) };
+    if made.is_null() {
+        return Err(format!("mkdtemp: {}", std::io::Error::last_os_error()));
+    }
+    Ok(PathBuf::from(std::ffi::OsStr::from_bytes(path.as_bytes())))
+}
+
+pub fn id_of(dir: &Path) -> Option<&str> {
+    dir.file_name()?.to_str()?.strip_prefix(PREFIX)
+}
+
+pub fn is_id(id: &str) -> bool {
+    id.len() == 6 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+fn write_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, contents).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+pub fn write_state(dir: &Path, state: &State) -> Result<(), String> {
+    let json = serde_json::to_vec(state).map_err(|e| e.to_string())?;
+    write_atomically(&dir.join(STATE_FILE), &json)
+}
+
+pub fn read_state(dir: &Path) -> Option<State> {
+    serde_json::from_slice(&fs::read(dir.join(STATE_FILE)).ok()?).ok()
+}
+
+pub fn pause(dir: &Path, reason: &str) -> Result<(), String> {
+    write_atomically(&dir.join(PAUSED_FILE), reason.as_bytes())
+}
+
+pub fn resume(dir: &Path) -> Result<(), String> {
+    match fs::remove_file(dir.join(PAUSED_FILE)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("cannot resume: {e}")),
+        _ => Ok(()),
+    }
+}
+
+pub fn paused(dir: &Path) -> Option<String> {
+    fs::read_to_string(dir.join(PAUSED_FILE)).ok()
+}
+
+pub fn set_user_idle(dir: &Path, idle: bool) {
+    let path = dir.join(USER_IDLE_FILE);
+    if idle {
+        let _ = fs::write(path, b"");
+    } else {
+        let _ = fs::remove_file(path);
+    }
+}
+
+pub fn user_idle(dir: &Path) -> bool {
+    dir.join(USER_IDLE_FILE).exists()
+}
+
+fn process_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    pid > 0
+        && (unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
+
+fn wayland_socket_alive(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let name = entry.file_name();
+            name.to_str().is_some_and(is_wayland_socket)
+                && UnixStream::connect(entry.path()).is_ok()
+        })
+}
+
+pub fn is_wayland_socket(name: &str) -> bool {
+    name.strip_prefix("wayland-")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn owned_dirs() -> Vec<PathBuf> {
+    let uid = unsafe { libc::getuid() };
+    fs::read_dir(temp_root())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| id_of(path).is_some_and(is_id))
+        .filter(|path| fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && m.uid() == uid))
+        .collect()
+}
+
+pub fn is_live(dir: &Path) -> bool {
+    match read_state(dir) {
+        Some(state) => process_alive(state.pid),
+        None => {
+            let young = fs::symlink_metadata(dir)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| SystemTime::now().duration_since(t).ok())
+                .is_none_or(|age| age < STARTING_GRACE);
+            young || wayland_socket_alive(dir)
+        }
+    }
+}
+
+pub fn remove_stale() -> Vec<PathBuf> {
+    owned_dirs()
+        .into_iter()
+        .filter(|dir| !is_live(dir))
+        .filter(|dir| fs::remove_dir_all(dir).is_ok())
+        .collect()
+}
+
+pub fn live_desktops() -> Vec<(String, PathBuf, State)> {
+    let mut desktops: Vec<_> = owned_dirs()
+        .into_iter()
+        .filter_map(|dir| {
+            let state = read_state(&dir)?;
+            (state.wayland_display.is_some() && process_alive(state.pid)).then_some(())?;
+            Some((id_of(&dir)?.to_string(), dir, state))
+        })
+        .collect();
+    desktops.sort_by(|a, b| a.0.cmp(&b.0));
+    desktops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_the_mkdtemp_suffix() {
+        assert!(is_id("Ab12Cd"));
+        assert!(!is_id("../etc"));
+        assert!(!is_id("Ab12C"));
+        assert_eq!(id_of(Path::new("/tmp/sel.Ab12Cd")), Some("Ab12Cd"));
+        assert_eq!(id_of(Path::new("/tmp/other")), None);
+    }
+
+    #[test]
+    fn pause_and_resume_round_trip() {
+        let dir = make_dir().unwrap();
+        assert_eq!(paused(&dir), None);
+        pause(&dir, "the user pressed stop").unwrap();
+        assert_eq!(paused(&dir).as_deref(), Some("the user pressed stop"));
+        resume(&dir).unwrap();
+        resume(&dir).unwrap();
+        assert_eq!(paused(&dir), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
