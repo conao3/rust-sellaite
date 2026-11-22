@@ -288,6 +288,19 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
                 Err(e) => respond_error(&mut stream, "500 Internal Server Error", &e),
             }
         }
+        ("POST", ["api", "desktops", id, "approval", request_id]) => {
+            let Some(dir) = runtime::live_dir(id) else {
+                respond_error(&mut stream, "404 Not Found", "no such desktop");
+                return Ok(());
+            };
+            let result = read_body(&mut reader, &request)
+                .and_then(|body| serde_json::from_slice(&body).map_err(|e| e.to_string()))
+                .and_then(|decision| crate::approval::decide(&dir, request_id, &decision));
+            match result {
+                Ok(()) => respond_json(&mut stream, "200 OK", &json!({"Received": true})),
+                Err(e) => respond_error(&mut stream, "409 Conflict", &e),
+            }
+        }
         ("POST", ["api", "desktops", id, "notes"]) => {
             let Some(dir) = runtime::live_dir(id) else {
                 respond_error(&mut stream, "404 Not Found", "no such desktop");
@@ -339,6 +352,7 @@ pub fn desktop_json(id: &str, dir: &Path) -> Value {
         "TakingOver": runtime::taking_over(dir),
         "PausedReason": paused,
         "UserSeatIdle": runtime::user_idle(dir),
+        "PendingApproval": crate::approval::pending(dir),
         "PendingNotes": runtime::pending_notes(dir),
     })
 }

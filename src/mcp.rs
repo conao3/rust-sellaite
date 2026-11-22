@@ -4,9 +4,16 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::{Value, json};
 
-use crate::chord;
 use crate::desktop::Desktop;
 use crate::input::Button;
+use crate::{approval, chord};
+
+fn coord_from(value: &Value, key: &str) -> Result<u32, String> {
+    value[key]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| format!("{key} must be a non-negative integer"))
+}
 
 const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_WIDTH: u32 = 1280;
@@ -92,7 +99,9 @@ fn tools() -> Value {
                 "properties": {
                     "x": {"type": "integer", "minimum": 0},
                     "y": {"type": "integer", "minimum": 0},
-                    "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "Default left"}
+                    "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "Default left"},
+                    "intent": {"type": "string", "enum": ["ordinary", "send", "submit", "purchase", "password", "navigate"], "description": "Declare sensitive actions, including clicking links that leave the allowed domains"},
+                    "domain": {"type": "string", "description": "Destination hostname when intent is navigate"}
                 },
                 "required": ["x", "y"],
                 "additionalProperties": false
@@ -103,7 +112,9 @@ fn tools() -> Value {
             "description": "Type text into the window that has the agent seat's keyboard focus.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"text": {"type": "string"}},
+                "properties": {"text": {"type": "string"},
+                    "intent": {"type": "string", "enum": ["ordinary", "send", "submit", "purchase", "password", "navigate"], "description": "Declare sensitive actions, including clicking links that leave the allowed domains"},
+                    "domain": {"type": "string", "description": "Destination hostname when intent is navigate"}},
                 "required": ["text"],
                 "additionalProperties": false
             }
@@ -320,18 +331,23 @@ impl Server {
                 Ok(json!({"content": [{"type": "image", "data": data, "mimeType": "image/png"}]}))
             }
             "click" => {
-                let coord = |key: &str| {
-                    args.get(key)
-                        .and_then(Value::as_u64)
-                        .and_then(|n| u32::try_from(n).ok())
-                        .ok_or_else(|| format!("{key} must be a non-negative integer"))
-                };
-                let (x, y) = (coord("x")?, coord("y")?);
+                let (x, y) = (coord_from(args, "x")?, coord_from(args, "y")?);
                 let button = match args.get("button").and_then(Value::as_str) {
                     None => Button::Left,
                     Some(name) => Button::parse(name)?,
                 };
-                self.input_desktop()?.click(x, y, button)?;
+                let desktop = self.input_desktop()?;
+                let info = desktop.info();
+                if x >= info.width || y >= info.height {
+                    return Err("click is outside the desktop".into());
+                }
+                let decision = approval::check(desktop, name, args, Some((x, y)))?;
+                let (x, y) = if decision["Action"] == "edit" {
+                    (coord_from(&decision, "X")?, coord_from(&decision, "Y")?)
+                } else {
+                    (x, y)
+                };
+                desktop.click(x, y, button)?;
                 Ok(text_result(format!("clicked at ({x}, {y})")))
             }
             "type" => {
@@ -339,7 +355,13 @@ impl Server {
                     .get("text")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "text must be a string".to_string())?;
-                self.input_desktop()?.type_text(text)?;
+                let desktop = self.input_desktop()?;
+                let decision = approval::check(desktop, name, args, None)?;
+                let text = decision["Text"]
+                    .as_str()
+                    .filter(|_| decision["Action"] == "edit")
+                    .unwrap_or(text);
+                desktop.type_text(text)?;
                 Ok(text_result(format!(
                     "typed {} characters",
                     text.chars().count()

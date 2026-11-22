@@ -445,3 +445,86 @@ fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
     assert_eq!(notes_in(&stopped), ["at the end"], "{stopped}");
     second.call("stop_desktop", json!({}));
 }
+
+#[test]
+fn risky_input_waits_for_the_matching_dashboard_decision() {
+    let mut mcp = Mcp::spawn();
+    let desktop = mcp.call("start_desktop", json!({}));
+    let id = desktop["structuredContent"]["Id"].as_str().unwrap();
+    let dashboard = Dashboard::spawn();
+    let origin = dashboard.origin();
+    let allowed = mcp.call(
+        "click",
+        json!({
+            "x": 42, "y": 50, "intent": "navigate", "domain": "ALLOWED.example.invalid"
+        }),
+    );
+    assert_eq!(allowed["content"][0]["text"], "clicked at (42, 50)");
+    for (intent, decision, expected) in [
+        ("send", json!({"Action": "approve"}), "clicked at (42, 50)"),
+        (
+            "purchase",
+            json!({"Action": "edit", "X": 80, "Y": 90}),
+            "clicked at (80, 90)",
+        ),
+        (
+            "navigate",
+            json!({"Action": "reject"}),
+            "the user rejected the action",
+        ),
+    ] {
+        let request = mcp.send_request(
+            "tools/call",
+            json!({
+                "name": "click", "arguments": {"x": 42, "y": 50, "intent": intent}
+            }),
+        );
+        let pending = wait_for("approval", || {
+            let approval = dashboard.desktop(id)?["PendingApproval"].clone();
+            approval.is_object().then_some(approval)
+        });
+        assert_eq!(pending["Tool"], "click");
+        let path = format!(
+            "/api/desktops/{id}/approval/{}",
+            pending["Id"].as_str().unwrap()
+        );
+        assert_eq!(
+            dashboard
+                .post_json(&path, "https://foreign.invalid", &decision)
+                .0,
+            403
+        );
+        let stale = format!("/api/desktops/{id}/approval/stale");
+        assert_eq!(dashboard.post_json(&stale, &origin, &decision).0, 409);
+        assert_eq!(dashboard.post_json(&path, &origin, &decision).0, 200);
+        let result = mcp.read_result(request);
+        assert_eq!(result["content"][0]["text"], expected);
+        assert!(dashboard.desktop(id).unwrap()["PendingApproval"].is_null());
+    }
+    let request = mcp.send_request(
+        "tools/call",
+        json!({
+            "name": "type", "arguments": {"text": "private placeholder", "intent": "password"}
+        }),
+    );
+    let pending = wait_for("password approval", || {
+        let approval = dashboard.desktop(id)?["PendingApproval"].clone();
+        approval.is_object().then_some(approval)
+    });
+    assert!(!pending.to_string().contains("private placeholder"));
+    let path = format!(
+        "/api/desktops/{id}/approval/{}",
+        pending["Id"].as_str().unwrap()
+    );
+    assert_eq!(
+        dashboard
+            .post_json(&path, &origin, &json!({"Action": "edit", "Text": "edited"}))
+            .0,
+        200
+    );
+    assert_eq!(
+        mcp.read_result(request)["content"][0]["text"],
+        "typed 6 characters"
+    );
+    mcp.call("stop_desktop", json!({}));
+}

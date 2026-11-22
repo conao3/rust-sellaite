@@ -1,3 +1,4 @@
+mod approval;
 mod chord;
 mod dashboard;
 mod desktop;

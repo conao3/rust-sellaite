@@ -63,7 +63,7 @@ pub fn is_id(id: &str) -> bool {
     id.len() == 6 && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-fn write_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, contents).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
     fs::rename(&tmp, path).map_err(|e| format!("cannot write {}: {e}", path.display()))

@@ -15,6 +15,7 @@ impl Mcp {
     pub fn spawn() -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_sellaite"))
             .args(["mcp", "serve"])
+            .env("SELLAITE_ALLOWED_DOMAINS", "allowed.example.invalid")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -46,11 +47,20 @@ impl Mcp {
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.send_request(method, params);
+        self.read_result(id)
+    }
+
+    pub fn send_request(&mut self, method: &str, params: Value) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         writeln!(self.stdin, "{message}").unwrap();
         self.stdin.flush().unwrap();
+        id
+    }
+
+    pub fn read_result(&mut self, id: u64) -> Value {
         let mut line = String::new();
         self.stdout.read_line(&mut line).unwrap();
         let response: Value = serde_json::from_str(&line).expect("a JSON-RPC response");

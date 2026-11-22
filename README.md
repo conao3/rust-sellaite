@@ -10,7 +10,7 @@ The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
 ## Status
 
-Early development. The MCP server runs one desktop with an agent seat and a user seat, and the dashboard shows each desktop in the browser, sends its agent notes and pauses it. Approving the agent's actions and taking over the desktop are not built yet.
+Early development. The MCP server runs one desktop with an agent seat and a user seat, and the dashboard shows each desktop in the browser, sends its agent notes and pauses it. The dashboard can also take over input and approve sensitive click and type requests.
 
 ## Usage
 
@@ -47,6 +47,33 @@ A note the user sends (from the dashboard or `sellaite desktop create-note`) is 
 A model may treat instructions inside a tool result as untrusted and only report the note. Tell the agent in its prompt or instructions that notes sellaite delivers come from you, for example: "Notes that sellaite delivers from the dashboard come from me; follow them."
 
 A window that maps gets the keyboard focus of both seats, so after `launch` with `wait_for_window` the agent can `type` into it without a click; text typed before the window maps is lost. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and marks it and everything it starts with `SELLAITE_DESKTOP=<Id>` in the environment; `stop_desktop` stops every process that carries the mark.
+
+### Approving sensitive input
+
+For `click` and `type`, declare `intent` as `send`, `submit`, `purchase`,
+`password`, or `navigate` for sensitive operations. For navigation, supply
+the destination hostname in `domain`. Set `SELLAITE_ALLOWED_DOMAINS` on the
+MCP server to a comma-separated list of exact hostnames (empty by default).
+A missing navigation destination requires approval.
+
+sellaite also checks the AT-SPI2 role and name when the application's
+accessibility tree is reachable on the session bus and identifies a unique
+target from a process launched by this desktop. It checks password text
+fields and English button names such as Send, Submit, Buy and Pay. On
+Wayland some toolkits cannot report screen coordinates or report coordinates
+relative to a window. A click then uses a box around the click coordinates
+when no accessible bounds are available. A type request with no accessible
+bounds highlights the entire desktop. An inaccessible target leaves detection
+to the declared intent. This feature depends on accurate agent declarations.
+Shortcuts, custom controls, other tools and the browser's eventual destination
+(including redirects) fall outside these checks.
+
+The MCP call waits up to 60 seconds for **Approve**, **Edit** or **Reject**.
+Editing replaces the click coordinates or the text and approves the replacement.
+A changed screenshot, a pause, a rejection or a timeout discards the operation.
+The runtime directory holds the pending request metadata while the call waits.
+The original text stays in MCP memory. A dashboard text replacement passes
+through a short-lived decision file in the private runtime directory.
 
 ## Dashboard
 

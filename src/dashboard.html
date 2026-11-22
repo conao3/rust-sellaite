@@ -118,6 +118,12 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-radius: 8px;
   overflow: hidden;
 }
+#approval-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid orange;
+  pointer-events: none;
+}
 .screen > div { width: 100%; height: 100%; }
 .note { color: var(--muted); margin: 8px 0 0; }
 .compose { display: grid; gap: 6px; margin: 0 0 12px; }
@@ -176,7 +182,19 @@ button.send { background: var(--accent); color: var(--accent-text); }
         </div>
         <p class="note error" id="note-error" hidden></p>
       </form>
-      <div class="screen"><div id="screen"></div></div>
+      <section id="approval" hidden aria-label="Pending approval">
+        <p id="approval-label"></p>
+        <button id="approve" type="button">Approve</button>
+        <button id="edit-approval" type="button">Edit</button>
+        <button id="reject" type="button">Reject</button>
+        <form id="approval-edit" hidden>
+          <label id="approval-x-label">X <input id="approval-x" type="number" required min="0"></label>
+          <label id="approval-y-label">Y <input id="approval-y" type="number" required min="0"></label>
+          <label id="approval-text-label">Replacement text <input id="approval-text" autocomplete="off"></label>
+          <button type="submit">Approve edit</button>
+        </form>
+      </section>
+      <div class="screen"><div id="screen"></div><span id="approval-box" hidden></span></div>
       <p class="note" id="connection">Not connected.</p>
       <p class="note error" id="action-error" hidden></p>
     </section>
@@ -274,16 +292,17 @@ function render() {
   status.replaceChildren();
   const badge = document.createElement("span");
   badge.className = `badge ${desktop.Paused ? "paused" : "running"}`;
-  badge.textContent = desktop.Paused ? "Paused" : "Running";
+  badge.textContent = desktop.Paused ? "Paused" : desktop.PendingApproval ? "Waiting for approval" : "Running";
   status.append(badge, document.createTextNode(desktop.Paused
     ? ` The agent's click, type and key return an error: ${desktop.PausedReason}.`
-    : " The agent can click, type and press keys."));
+    : desktop.PendingApproval ? " The agent is waiting for a decision." : " The agent can click, type and press keys."));
   $("stop").disabled = busy || desktop.Paused;
   $("stop").title = desktop.Paused ? "The agent is already paused." : "Pause the agent: its input tools return an error until you resume it.";
   $("resume").disabled = busy || !desktop.Paused || desktop.TakingOver;
   $("resume").title = desktop.Paused ? "Let the agent use its input tools again." : "The agent is not paused.";
   renderCompose(desktop);
   connect(desktop.Id);
+  renderApproval(desktop);
   if (!desktop.TakingOver && takeoverId === desktop.Id) takeoverId = null;
   $("takeover").disabled = busy;
   $("takeover").textContent = desktop.TakingOver ? "Give back" : "Take over";
@@ -293,6 +312,87 @@ function render() {
     rfb.focusOnClick = input;
   }
 }
+
+let shownApproval = null;
+
+function currentDesktop() {
+  return desktops.find((desktop) => desktop.Id === selectedId());
+}
+
+function renderApproval(desktop) {
+  const request = desktop.PendingApproval;
+  const id = request ? `${desktop.Id}/${request.Id}` : null;
+  if (id !== shownApproval) {
+    $("approval-edit").hidden = true;
+    $("approval-text").value = "";
+    shownApproval = id;
+  }
+  $("approval").hidden = !request;
+  const box = $("approval-box");
+  const canvas = $("screen").querySelector("canvas");
+  box.hidden = !(request && canvas);
+  if (!request) return;
+  const target = [request.Target.Role, request.Target.Name, request.Domain].filter(Boolean);
+  $("approval-label").textContent = [`${request.Tool}: ${request.Reason}`, ...target].join(" · ");
+  for (const button of ["approve", "edit-approval", "reject"]) $(button).disabled = busy;
+  if (canvas) {
+    const screen = $("screen").getBoundingClientRect();
+    const frame = canvas.getBoundingClientRect();
+    const {X, Y, Width, Height} = request.Bounds;
+    box.style.left = `${frame.left - screen.left + frame.width * X / desktop.Width}px`;
+    box.style.top = `${frame.top - screen.top + frame.height * Y / desktop.Height}px`;
+    box.style.width = `${frame.width * Width / desktop.Width}px`;
+    box.style.height = `${frame.height * Height / desktop.Height}px`;
+  }
+}
+
+async function decideApproval(decision) {
+  const desktop = currentDesktop();
+  if (!desktop?.PendingApproval || busy) return;
+  const id = desktop.PendingApproval.Id;
+  busy = true;
+  render();
+  $("action-error").hidden = true;
+  try {
+    const response = await fetch(`/api/desktops/${desktop.Id}/approval/${id}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(decision),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.Error);
+    $("approval-edit").hidden = true;
+  } catch (error) {
+    $("action-error").textContent = error.message;
+    $("action-error").hidden = false;
+  } finally {
+    busy = false;
+    await refresh();
+  }
+}
+
+$("approve").addEventListener("click", () => decideApproval({Action: "approve"}));
+$("reject").addEventListener("click", () => decideApproval({Action: "reject"}));
+$("edit-approval").addEventListener("click", () => {
+  const request = currentDesktop()?.PendingApproval;
+  if (!request) return;
+  const click = request.Tool === "click";
+  $("approval-x-label").hidden = !click;
+  $("approval-y-label").hidden = !click;
+  $("approval-text-label").hidden = click;
+  $("approval-x").disabled = !click;
+  $("approval-y").disabled = !click;
+  $("approval-x").value = request.X ?? "";
+  $("approval-y").value = request.Y ?? "";
+  $("approval-text").type = request.Reason.includes("password") ? "password" : "text";
+  $("approval-edit").hidden = false;
+});
+$("approval-edit").addEventListener("submit", (event) => {
+  event.preventDefault();
+  decideApproval(currentDesktop()?.PendingApproval?.Tool === "click"
+    ? {Action: "edit", X: $("approval-x").valueAsNumber, Y: $("approval-y").valueAsNumber}
+    : {Action: "edit", Text: $("approval-text").value});
+});
 
 function renderCompose(desktop) {
   const text = $("note-text");

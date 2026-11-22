@@ -27,8 +27,11 @@
           desktopTools = [
             pkgs.sway-unwrapped
             pkgs.grim
+            pkgs.python3
+            pkgs.coreutils
             pkgs.wayvnc
           ];
+          atspiLibrary = "${pkgs.at-spi2-core}/lib/libatspi.so.0";
           novncDir = "${pkgs.novnc}/share/webapps/novnc";
           fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
         in
@@ -53,6 +56,7 @@
             LEANFRAN_CLI = "${leanfran}/bin/leanfran";
             FONTCONFIG_FILE = fontsConf;
             SELLAITE_NOVNC_DIR = novncDir;
+            SELLAITE_ATSPI_LIBRARY = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux atspiLibrary;
           };
           packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             default = pkgs.rustPlatform.buildRustPackage {
@@ -65,7 +69,7 @@
               nativeCheckInputs = desktopTools ++ [ pkgs.foot ];
               FONTCONFIG_FILE = fontsConf;
               SELLAITE_NOVNC_DIR = novncDir;
-              postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools} --set-default SELLAITE_NOVNC_DIR ${novncDir}";
+              postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools} --set-default SELLAITE_NOVNC_DIR ${novncDir} --set-default SELLAITE_ATSPI_LIBRARY ${atspiLibrary}";
               meta = {
                 description = "A desktop and an input seat of its own for an AI computer-use agent";
                 mainProgram = "sellaite";
