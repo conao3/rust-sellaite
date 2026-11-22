@@ -20,11 +20,7 @@ sellaite runs on Linux and needs `sway` and `grim` on `PATH` (the Nix package br
 nix run github:conao3/rust-sellaite -- mcp serve
 ```
 
-Register it with an MCP client, for example Claude Code:
-
-```sh
-claude mcp add sellaite -- nix run github:conao3/rust-sellaite -- mcp serve
-```
+See [Use with Claude Code / Codex](#use-with-claude-code--codex) to register it with an MCP client.
 
 Tools:
 
@@ -44,6 +40,52 @@ To open an application in the desktop, run it with the environment that `start_d
 ```sh
 XDG_RUNTIME_DIR=<XdgRuntimeDir> WAYLAND_DISPLAY=<WaylandDisplay> foot &
 ```
+
+## Use with Claude Code / Codex
+
+The tools act on the desktop only; the client opens applications in it with its shell tool, using the `XdgRuntimeDir` and `WaylandDisplay` that `start_desktop` returned. Run the client where `sway`, `grim` and the applications you want (for example `foot`) are on `PATH`.
+
+Claude Code:
+
+```sh
+claude mcp add sellaite -- nix run github:conao3/rust-sellaite -- mcp serve
+```
+
+For a headless run, pass the server in a config file and allow its tools and the shell:
+
+```json
+{
+  "mcpServers": {
+    "sellaite": {
+      "command": "nix",
+      "args": ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve"]
+    }
+  }
+}
+```
+
+```sh
+claude -p "Start a desktop, open foot, type 'echo hello', press Return, take a screenshot and stop the desktop." \
+  --mcp-config sellaite.json --allowedTools 'mcp__sellaite__*' Bash
+```
+
+The client opens foot with a command such as:
+
+```sh
+XDG_RUNTIME_DIR=<XdgRuntimeDir> WAYLAND_DISPLAY=<WaylandDisplay> setsid foot >/dev/null 2>&1 &
+```
+
+A fresh foot window has no keyboard focus on the agent seat until the agent clicks it.
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.sellaite]
+command = "nix"
+args = ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve"]
+```
+
+The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05.
 
 ## Development
 

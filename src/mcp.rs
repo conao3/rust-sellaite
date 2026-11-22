@@ -7,7 +7,7 @@ use crate::chord;
 use crate::desktop::Desktop;
 use crate::input::Button;
 
-const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_WIDTH: u32 = 1280;
 const DEFAULT_HEIGHT: u32 = 720;
 
@@ -267,6 +267,23 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(response["result"]["isError"], true);
+    }
+
+    #[test]
+    fn negotiates_the_protocol_version() {
+        let mut server = Server::default();
+        let version = |server: &mut Server, requested: &str| {
+            server
+                .handle(&json!({
+                    "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                    "params": {"protocolVersion": requested}
+                }))
+                .unwrap()["result"]["protocolVersion"]
+                .clone()
+        };
+        assert_eq!(version(&mut server, "2025-11-25"), "2025-11-25");
+        assert_eq!(version(&mut server, "2025-06-18"), "2025-06-18");
+        assert_eq!(version(&mut server, "2099-01-01"), "2025-11-25");
     }
 
     #[test]
