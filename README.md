@@ -301,11 +301,16 @@ Run `sellaite help`, `sellaite desktop help`, or
 ## Development
 
 ```sh
-nix develop      # Rust, Lean, leanfran, sway, grim, wayvnc, noVNC
-make check       # format check, clippy, Lean proofs and audit, tests (including headless sway tests)
+nix develop      # Rust, cargo-deny, Lean, leanfran, sway, grim, wayvnc, noVNC
+make check       # formatting, clippy, dependency checks, Lean proofs and audit, Rust tests
 nix build        # build the sellaite binary
 nix run          # run it
 ```
+
+`make check` and CI check locked Rust dependencies for advisories and license
+requirements using cargo-deny. The headless sway tests exercise keyboard
+chords through MCP and verify that the agent's input preserves the user seat's
+focus.
 
 ## License
 

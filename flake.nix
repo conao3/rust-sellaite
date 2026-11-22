@@ -44,6 +44,7 @@
           devShells.default = pkgs.mkShell {
             packages = [
               pkgs.cargo
+              pkgs.cargo-deny
               pkgs.rustc
               pkgs.clippy
               pkgs.rustfmt

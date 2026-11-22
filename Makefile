@@ -2,6 +2,7 @@
 check:
 	nix fmt -- --ci
 	cargo clippy --all-targets -- -D warnings
+	cargo deny --locked check advisories licenses
 	lake -d lean build --wfail
 	lake -d audit build --wfail
 	git diff --exit-code -- .leanfran lean
