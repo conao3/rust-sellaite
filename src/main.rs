@@ -102,10 +102,17 @@ fn note_text(value: &str) -> Result<String, String> {
 }
 
 fn address(value: &str) -> Result<std::net::SocketAddr, String> {
-    parameter_text(value)?
+    let address: std::net::SocketAddr = parameter_text(value)?
         .trim()
         .parse()
-        .map_err(|error: std::net::AddrParseError| error.to_string())
+        .map_err(|error: std::net::AddrParseError| error.to_string())?;
+    if !address.ip().is_loopback() {
+        return Err(
+            "the dashboard needs a loopback address; use an HTTPS reverse proxy for remote access"
+                .into(),
+        );
+    }
+    Ok(address)
 }
 
 fn novnc_directory(value: std::ffi::OsString) -> Result<std::path::PathBuf, String> {
@@ -133,7 +140,7 @@ enum DashboardCommand {
     /// Serve the dashboard over HTTP
     #[command(alias = "serve")]
     StartDashboard {
-        /// Address to listen on
+        /// Loopback address to listen on
         #[arg(long, default_value = "127.0.0.1:8730", value_parser = address)]
         address: std::net::SocketAddr,
         /// noVNC's directory (the one that holds core/rfb.js)

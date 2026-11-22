@@ -15,6 +15,7 @@ use common::{Mcp, wait_for};
 struct Dashboard {
     child: Child,
     host: String,
+    cookie: String,
 }
 
 impl Dashboard {
@@ -29,18 +30,29 @@ impl Dashboard {
             .read_line(&mut line)
             .unwrap();
         let url: Value = serde_json::from_str(&line).expect("the dashboard URL");
-        let host = url["Url"]
+        let (host, token) = url["Url"]
             .as_str()
             .unwrap()
             .trim_start_matches("http://")
-            .trim_end_matches('/')
-            .to_string();
-        Self { child, host }
+            .split_once("/?token=")
+            .unwrap();
+        let port = host.rsplit_once(':').unwrap().1;
+        Self {
+            child,
+            host: host.to_owned(),
+            cookie: format!("sellaite-{port}={token}"),
+        }
     }
 
     fn send(&self, head: &str) -> (u16, Vec<u8>) {
         let mut stream = TcpStream::connect(&self.host).unwrap();
-        stream.write_all(head.as_bytes()).unwrap();
+        let (request_line, rest) = head.split_once("\r\n").unwrap();
+        write!(
+            stream,
+            "{request_line}\r\nCookie: {}\r\n{rest}",
+            self.cookie
+        )
+        .unwrap();
         let mut response = Vec::new();
         stream.read_to_end(&mut response).unwrap();
         let split = response
@@ -131,9 +143,10 @@ fn dashboard_vnc(dashboard: &Dashboard, id: &str, connection: &str) -> BufReader
     let mut ws = TcpStream::connect(&dashboard.host).unwrap();
     write!(
         ws,
-        "GET /api/desktops/{id}/vnc?connection={connection} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        "GET /api/desktops/{id}/vnc?connection={connection} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nCookie: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n",
         dashboard.host,
-        dashboard.origin()
+        dashboard.origin(),
+        dashboard.cookie
     )
     .unwrap();
     ws.set_read_timeout(Some(Duration::from_secs(3))).unwrap();

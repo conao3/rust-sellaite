@@ -27,7 +27,7 @@ applications you want the agent to open, such as foot, on the same host.
 For example, make foot available for a Claude Code session with
 `nix shell nixpkgs#foot --command claude`.
 
-Leave the dashboard running, open `http://127.0.0.1:8730/`, and ask Claude
+Leave the dashboard running, open the `Url` it prints, and ask Claude
 Code to start a desktop, open foot, and take a screenshot. Select the
 desktop when it appears. Use **Send note** to guide the agent, **Take over**
 to control the desktop, and **Give back** to return control. When an
@@ -99,14 +99,16 @@ through a short-lived decision file in the private runtime directory.
 nix run github:conao3/rust-sellaite -- dashboard start-dashboard
 ```
 
-The dashboard listens on `http://127.0.0.1:8730/` (`--address` changes it) and prints its URL as `{"Url": ...}`. It lists the desktops that running `sellaite mcp serve-mcp` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode, so watching the page sends no input to the desktop.
+The dashboard listens on loopback (default `127.0.0.1:8730`, configurable with `--address`) and prints its startup URL as `{"Url": ...}`. Open that URL to exchange its access token for an HttpOnly browser cookie and redirect to the dashboard. Keep the startup URL private and open the new one after each restart. The dashboard lists the desktops that running `sellaite mcp serve-mcp` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode.
 
 - **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
 - **Take over** pauses agent input and grants control to the current tab. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, resumes the agent, and queues a screenshot reminder.
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
 - Any input on your seat (`seat0`), for example from a VNC client connected to the desktop's `VncSocket`, also pauses the agent. sellaite watches `seat0` with ext-idle-notify-v1 (500 ms timeout); the agent's own input is on the `agent` seat and does not pause it.
 
-The dashboard serves noVNC from `--novnc-dir` (or `SELLAITE_NOVNC_DIR`; the Nix package sets it) and proxies the browser's WebSocket to the desktop's wayvnc unix socket. It answers only requests whose `Host` is `localhost`, `127.0.0.1`, `[::1]` or the address it listens on, and it accepts GraphQL requests and the VNC WebSocket only from its own page (`Origin`).
+The dashboard serves noVNC from `--novnc-dir` or `SELLAITE_NOVNC_DIR` and proxies the browser's WebSocket to the desktop's wayvnc unix socket. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
+
+The token protects the dashboard's HTTP endpoints from callers that lack the credential. Run sellaite and its launched programs within a trusted operating-system account. Programs with access to that account's dashboard output, browser profile or desktop runtime files are inside the trust boundary.
 
 ### Notes from the command line
 
@@ -129,7 +131,9 @@ sellaite dashboard start-dashboard \
   --allowed-logins you@example.com
 ```
 
-`--public-origins` adds the origins the proxy serves the dashboard under: their `Host` and `Origin` are accepted next to the loopback ones, and the output lists them as `PublicUrls`. It needs `--allowed-logins`, which makes every request (the page, the desktop list, noVNC, Stop, Resume and the VNC WebSocket) carry a [`Tailscale-User-Login`](https://tailscale.com/kb/1312/serve#identity-headers) header naming one of the logins; any other request gets 403, including one sent to the loopback address without the header. `tailscale serve` sets the header from the tailnet identity of the requesting machine and replaces a value the client sends, so the dashboard must listen only on loopback (the default) for the check to mean anything. Requests from tagged machines carry no login and are refused.
+`--public-origins` adds the HTTPS origins the proxy serves the dashboard under and prints their token-bearing startup URLs in `PublicUrls`. Open the matching URL through Tailscale Serve. For a systemd service, retrieve it from the service's startup output and keep that output private. The browser receives a Secure cookie on HTTPS.
+
+`--public-origins` requires `--allowed-logins`. Every request, including the startup URL, must carry an allowed [`Tailscale-User-Login`](https://tailscale.com/kb/1312/serve#identity-headers) in addition to the dashboard credential. Tailscale Serve derives that header from the requesting machine's tailnet identity. Requests without an allowed login receive 403.
 
 `sellaite mcp serve-mcp` removes, when it starts, the runtime directories (`/tmp/sel.*`) that killed runs left behind.
 
@@ -174,7 +178,7 @@ The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2
 ## Dashboard API
 
 Send GraphQL queries and mutations to `POST /api/graphql` with the dashboard's
-origin. The API exposes desktop status, pause and resume, takeover and give-back,
+`Origin` and the session cookie returned by the startup URL. The API exposes desktop status, pause and resume, takeover and give-back,
 notes, and approval decisions. See [schema.graphql](schema.graphql) for the types.
 Regenerate it after changing a resolver or type:
 

@@ -9,12 +9,14 @@ use async_graphql_axum::GraphQLResponse;
 use axum::extract::{
     DefaultBodyLimit, Path as RoutePath, Query, Request, State, WebSocketUpgrade, ws::Message,
 };
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::json;
+use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
@@ -77,6 +79,8 @@ struct Config {
     novnc_dir: PathBuf,
     sites: Vec<Site>,
     allowed_logins: Option<Vec<String>>,
+    token: String,
+    cookie_name: String,
 }
 
 impl Config {
@@ -86,7 +90,7 @@ impl Config {
         origin: Option<&str>,
         login: Option<&str>,
         needs_origin: bool,
-    ) -> Result<(), &'static str> {
+    ) -> Result<&Site, &'static str> {
         let site = self
             .sites
             .iter()
@@ -100,7 +104,11 @@ impl Config {
         if needs_origin && origin != Some(site.origin.as_str()) {
             return Err("cross-origin request");
         }
-        Ok(())
+        Ok(site)
+    }
+
+    fn matches_token(&self, value: &str) -> bool {
+        bool::from(self.token.as_bytes().ct_eq(value.as_bytes()))
     }
 }
 
@@ -108,11 +116,10 @@ pub fn parse_origin(text: &str) -> Result<String, String> {
     let text = text.strip_suffix('/').unwrap_or(text);
     let authority = text
         .strip_prefix("https://")
-        .or_else(|| text.strip_prefix("http://"))
-        .ok_or_else(|| format!("{text} does not start with https:// or http://"))?;
-    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
+        .ok_or_else(|| format!("{text} does not start with https://"))?;
+    if authority.parse::<axum::http::uri::Authority>().is_err() || authority.contains('@') {
         return Err(format!(
-            "{text} is not an origin (a scheme and a host with an optional port)"
+            "{text} is not an HTTPS origin (a scheme and a host with an optional port)"
         ));
     }
     Ok(text.to_ascii_lowercase())
@@ -147,13 +154,14 @@ pub async fn serve(
         format!("127.0.0.1:{port}"),
         format!("[::1]:{port}"),
     ];
-    if !local.ip().is_unspecified() {
-        allowed_hosts.push(local.to_string());
+    let local_host = local.to_string();
+    if !allowed_hosts.contains(&local_host) {
+        allowed_hosts.push(local_host);
     }
-    let url = format!(
-        "http://{}/",
-        allowed_hosts.last().unwrap_or(&allowed_hosts[1])
-    );
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).map_err(|e| format!("cannot generate a dashboard token: {e}"))?;
+    let token = URL_SAFE_NO_PAD.encode(secret);
+    let url = format!("http://{local}/?token={token}");
     let mut sites: Vec<Site> = allowed_hosts
         .into_iter()
         .map(|host| Site {
@@ -170,7 +178,10 @@ pub async fn serve(
             origin: origin.clone(),
         }
     }));
-    let public_urls: Vec<String> = public_origins.iter().map(|o| format!("{o}/")).collect();
+    let public_urls: Vec<String> = public_origins
+        .iter()
+        .map(|o| format!("{o}/?token={token}"))
+        .collect();
     println!("{}", json!({"Url": url, "PublicUrls": public_urls}));
     std::io::stdout().flush().map_err(|e| e.to_string())?;
     let control = SharedControl::default();
@@ -180,6 +191,8 @@ pub async fn serve(
         novnc_dir,
         sites,
         allowed_logins,
+        token,
+        cookie_name: format!("sellaite-{port}"),
     });
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX) }))
@@ -187,6 +200,7 @@ pub async fn serve(
         .route("/api/graphql", post(execute_graphql))
         .route("/api/desktops/{id}/vnc", get(vnc))
         .route("/novnc/{*path}", get(serve_file))
+        .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(DefaultBodyLimit::max(128 * 1024))
         .layer(middleware::from_fn_with_state(
             config.clone(),
@@ -201,29 +215,72 @@ async fn authorize_request(
     request: Request,
     next: Next,
 ) -> Response {
+    let mut response = dashboard_response(&config, request, next).await;
+    let headers = response.headers_mut();
+    for (name, value) in [
+        (header::CACHE_CONTROL, "no-store"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::CONTENT_SECURITY_POLICY, "frame-ancestors 'none'"),
+        (header::X_FRAME_OPTIONS, "DENY"),
+    ] {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    response
+}
+
+async fn dashboard_response(config: &Config, request: Request, next: Next) -> Response {
     let headers = request.headers();
     let value = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
     let host = value("host").map(str::to_ascii_lowercase);
     let origin = value("origin").map(str::to_ascii_lowercase);
     let needs_origin = matches!(request.uri().path(), "/api/graphql")
         || request.uri().path().starts_with("/api/desktops/");
-    if let Err(message) = config.authorize(
+    let site = match config.authorize(
         host.as_deref(),
         origin.as_deref(),
         value(LOGIN_HEADER),
         needs_origin,
     ) {
-        return (StatusCode::FORBIDDEN, message).into_response();
+        Ok(site) => site,
+        Err(message) => return (StatusCode::FORBIDDEN, message).into_response(),
+    };
+    let secure = site.origin.starts_with("https://");
+    let cookie_name = if secure {
+        format!("__Host-{}", config.cookie_name)
+    } else {
+        config.cookie_name.clone()
+    };
+    if request.method() == Method::GET
+        && request.uri().path() == "/"
+        && request
+            .uri()
+            .query()
+            .and_then(|query| query.strip_prefix("token="))
+            .is_some_and(|token| config.matches_token(token))
+    {
+        let attributes = if secure { "; Secure" } else { "" };
+        let cookie = format!(
+            "{cookie_name}={}; Path=/; HttpOnly; SameSite=Lax{attributes}",
+            config.token
+        );
+        let mut response = Redirect::to("/").into_response();
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        return response;
     }
-    let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response.headers_mut().insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    response
+    let authenticated = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .any(|(name, token)| name == cookie_name && config.matches_token(token));
+    if !authenticated {
+        return (StatusCode::FORBIDDEN, "open the dashboard's startup URL").into_response();
+    }
+    next.run(request).await
 }
 
 async fn execute_graphql(
@@ -423,6 +480,8 @@ mod tests {
                 },
             ],
             allowed_logins,
+            token: String::new(),
+            cookie_name: String::new(),
         }
     }
 
