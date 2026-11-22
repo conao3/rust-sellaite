@@ -426,6 +426,20 @@ fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
     assert_eq!(shot["content"][0]["type"], "image");
     assert_eq!(notes_in(&shot), ["before a screenshot"]);
 
+    assert_eq!(create_note(&id, "while launching").0, 0);
+    let launched = first.call("launch", json!({"argv": ["true"]}));
+    assert_eq!(notes_in(&launched), ["while launching"]);
+    assert!(
+        launched.get("structuredContent").is_none(),
+        "a client that shows structuredContent would hide the note: {launched}"
+    );
+    assert!(
+        first
+            .call("launch", json!({"argv": ["true"]}))
+            .get("structuredContent")
+            .is_some()
+    );
+
     assert_eq!(create_note(&id, "at the end").0, 0);
     let stopped = first.call("stop_desktop", json!({}));
     assert_eq!(notes_in(&stopped), ["at the end"], "{stopped}");

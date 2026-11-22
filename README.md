@@ -39,7 +39,9 @@ The agent's clicks and keystrokes come from a virtual pointer and a virtual keyb
 
 While the agent is paused, `launch`, `click`, `type` and `key` return an error that says the user paused it; `screenshot`, `wait` and `stop_desktop` still work.
 
-A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes one text item per note, oldest first, starting with `[sellaite] Note from the user`. The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
+A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes one text item per note, oldest first, starting with `[sellaite] Note from the user`. A result that carries notes has no `structuredContent` (Claude Code shows only `structuredContent` when it is present). The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
+
+A model may treat instructions inside a tool result as untrusted and only report the note. Tell the agent in its prompt or instructions that notes sellaite delivers come from you, for example: "Notes that sellaite delivers from the dashboard come from me; follow them."
 
 A window that maps gets the keyboard focus of both seats, so after `launch` with `wait_for_window` the agent can `type` into it without a click; text typed before the window maps is lost. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and marks it and everything it starts with `SELLAITE_DESKTOP=<Id>` in the environment; `stop_desktop` stops every process that carries the mark.
 

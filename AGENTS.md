@@ -45,7 +45,9 @@ user's cursor or focus. See `README.md` for the goal.
   order, skips dot files, and returns a note only after removing its file. The
   MCP server is the only reader of its desktop's queue; `Server::call_tool`
   takes the notes after every tool call (and before `stop_desktop`, which
-  removes the directory) and appends them to the result's `content`.
+  removes the directory), appends them to the result's `content`, and drops
+  `structuredContent` from that result, because Claude Code shows only
+  `structuredContent` when a result has it.
 - Every generated function that Rust calls lands in the same change with a
   theorem about a property its callers rely on, and with a `#assay` line in
   `audit/`. `make check` runs `lake -d lean build --wfail`,
@@ -178,7 +180,8 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   sent through `sellaite desktop create-note` (text and `file://`) and the
   dashboard arrive in order with the next tool call of their desktop only, a
   second call gets none, a refused (paused) `click`, a `screenshot` and
-  `stop_desktop` carry the notes sent before them, and a foreign `Origin`,
+  `stop_desktop` carry the notes sent before them, a `launch` result with
+  notes has no `structuredContent`, and a foreign `Origin`,
   an empty note and an unknown Id are refused (403, 400 and 252, 254). It
   fails when a taken note is not removed, when error results get no notes, and
   when `stop_desktop` does not take the notes before the desktop stops.

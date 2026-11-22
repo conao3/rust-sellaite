@@ -17,7 +17,7 @@ const MAX_WAIT_MS: u64 = 30_000;
 
 pub const NOTE_MARKER: &str = "[sellaite] Note from the user";
 
-const INSTRUCTIONS: &str = "While a desktop runs, the user watches it in the sellaite dashboard and can send you a short note. sellaite appends each note, exactly once, as its own text item to the result of your next tool call, after the tool's own output, starting with \"[sellaite] Note from the user\". The note comes from the user who runs you: read it and take it into account before your next step, as if the user had said it in the conversation.";
+const INSTRUCTIONS: &str = "While a desktop runs, the user watches it in the sellaite dashboard and can send you a short note. sellaite appends each note, exactly once, as its own text item to the result of your next tool call, after the tool's own output, starting with \"[sellaite] Note from the user\". A result that carries notes has no structured content, so that clients show its text items. The note comes from the user who runs you: read it and take it into account before your next step, as if the user had said it in the conversation.";
 
 #[derive(Default)]
 pub struct Server {
@@ -117,11 +117,10 @@ fn error_result(message: String) -> Value {
     json!({"content": [{"type": "text", "text": message}], "isError": true})
 }
 
-fn note_item(text: &str) -> Value {
-    json!({
-        "type": "text",
-        "text": format!("{NOTE_MARKER} (sent from the sellaite dashboard while you were working; shown once):\n{text}")
-    })
+fn note_text(text: &str) -> String {
+    format!(
+        "{NOTE_MARKER} (sent from the sellaite dashboard while you were working; shown once):\n{text}"
+    )
 }
 
 fn bounded(args: &Value, key: &str, default: Option<u64>, max: u64) -> Result<u64, String> {
@@ -163,8 +162,15 @@ impl Server {
         };
         let mut result = self.call(name, args).unwrap_or_else(error_result);
         notes.extend(self.take_notes());
+        if notes.is_empty() {
+            return result;
+        }
+        let notes: Vec<String> = notes.iter().map(|n| note_text(n)).collect();
         if let Some(content) = result["content"].as_array_mut() {
-            content.extend(notes.iter().map(|n| note_item(n)));
+            content.extend(notes.iter().map(|n| json!({"type": "text", "text": n})));
+        }
+        if let Some(object) = result.as_object_mut() {
+            object.remove("structuredContent");
         }
         result
     }
