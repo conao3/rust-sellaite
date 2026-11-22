@@ -142,7 +142,7 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
-        let mut sway = spawn_child(&mut command, "sway")?;
+        let mut sway = spawn_child(&mut command, "sway (package: sway)")?;
         let deadline = Instant::now() + START_TIMEOUT;
         let (wayland_display, swaysock) = loop {
             if let Ok(Some(status)) = sway.try_wait() {
@@ -216,7 +216,9 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
-        let wayvnc = self.wayvnc.insert(spawn_child(&mut command, "wayvnc")?);
+        let wayvnc = self
+            .wayvnc
+            .insert(spawn_child(&mut command, "wayvnc (package: wayvnc)")?);
         let deadline = Instant::now() + START_TIMEOUT;
         while !vnc_socket.exists() {
             if let Ok(Some(status)) = wayvnc.try_wait() {
@@ -437,7 +439,7 @@ impl Desktop {
             .env("WAYLAND_DISPLAY", &self.wayland_display)
             .stdin(Stdio::null())
             .output()
-            .map_err(|e| format!("cannot run grim: {e}"))?;
+            .map_err(|e| format!("cannot run grim (package: grim): {e}"))?;
         if !output.status.success() {
             return Err(format!(
                 "grim failed with {}: {}",

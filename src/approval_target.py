@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 import sys
 
-lib = C.CDLL(os.environ["SELLAITE_ATSPI_LIBRARY"])
+try:
+    lib = C.CDLL(os.environ["SELLAITE_ATSPI_LIBRARY"])
+except OSError as error:
+    print(error, file=sys.stderr)
+    sys.exit(78)
 ptr = C.c_void_p
 integer = C.c_int
 

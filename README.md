@@ -26,20 +26,94 @@ Use a dedicated unprivileged Linux user or a container for an agent you do not f
 
 Report vulnerabilities through the private channel in [SECURITY.md](SECURITY.md).
 
-## Quick start
+## Install on Linux
+
+### With Nix
 
 On Linux with Nix and flakes enabled, install sellaite from GitHub:
 
 ```sh
 nix profile install github:conao3/rust-sellaite
+```
+
+The Nix package supplies the runtime dependencies. Install any applications
+you want the agent to open, such as foot, on the same host.
+For example, make foot available for a Claude Code session with
+`nix shell nixpkgs#foot --command claude`.
+
+To try sellaite without installing it, use `nix run github:conao3/rust-sellaite -- mcp serve-mcp` as the MCP server command.
+
+### With Cargo
+
+Install Cargo, Rust and a system linker, then install the runtime dependencies
+for your distribution. Run sellaite as an ordinary user. The headless sway
+session needs neither a display server nor a GPU.
+
+On Ubuntu 26.04 LTS, enable the `universe` repository for the desktop packages:
+
+```sh
+sudo apt update
+sudo apt install build-essential cargo ca-certificates git sway grim wayvnc coreutils \
+  python3 libatspi2.0-0t64 at-spi2-core dbus novnc foot fonts-dejavu-core
+```
+
+On Arch Linux:
+
+```sh
+sudo pacman -Syu --needed gcc rust ca-certificates curl git sway grim wayvnc coreutils \
+  python at-spi2-core dbus foot ttf-dejavu
+```
+
+Install from GitHub with the checked-in generated Rust sources:
+
+```sh
+LEANFRAN_OFFLINE=1 cargo install --locked --git https://github.com/conao3/rust-sellaite
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+From a source checkout, run `LEANFRAN_OFFLINE=1 cargo install --locked --path .`.
+
+| Runtime dependency | Purpose |
+| --- | --- |
+| `sway` and `swaymsg` (both in `sway` on Ubuntu and Arch) | Run the headless desktop and inspect window focus during `launch`. |
+| `grim` | Capture PNG screenshots. |
+| `wayvnc` | Serve the desktop over a Unix socket on the user's input seat. |
+| `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Optional AT-SPI2 checks for sensitive input. |
+| noVNC | Render the desktop in the dashboard. |
+| `foot`, a font and D-Bus | Provide a terminal for the quick start and a session bus for accessibility-enabled apps. |
+
+The headless install check covers sway 1.11 and wayvnc 0.9.1 on Ubuntu
+26.04 LTS, and sway 1.12 and wayvnc 0.10.2 on Arch. Older versions and the
+minimum supported versions are untested.
+
+The Arch smoke container removes `cap_sys_nice` from its copy of `sway`.
+Docker's default capability set omits it, and headless sway can run without
+the scheduling privilege. The smoke test runs in an ordinary Docker container
+as an unprivileged user.
+
+To enable AT-SPI2 checks, set `SELLAITE_ATSPI_LIBRARY=libatspi.so.0` in the MCP
+server's environment and run it inside a D-Bus user session. You can also set
+an absolute library path. When the variable is unset, declared input intents
+still trigger approvals.
+
+The dashboard reads noVNC from `/usr/share/novnc` by default. The Ubuntu
+`novnc` package installs it there. On Arch, unpack an [upstream noVNC
+release](https://github.com/novnc/noVNC/releases) and pass the directory
+containing `core/rfb.js` with `--novnc-dir` or `SELLAITE_NOVNC_DIR`:
+
+```sh
+mkdir -p "$HOME/.local/share/novnc"
+curl -fsSL https://codeload.github.com/novnc/noVNC/tar.gz/refs/tags/v1.6.0 \
+  | tar -xz --strip-components=1 -C "$HOME/.local/share/novnc"
+export SELLAITE_NOVNC_DIR="$HOME/.local/share/novnc"
+```
+
+## Quick start
+
+```sh
 claude mcp add sellaite -- sellaite mcp serve-mcp
 sellaite dashboard start-dashboard
 ```
-
-The Nix package supplies sway, grim, wayvnc and noVNC. Install any
-applications you want the agent to open, such as foot, on the same host.
-For example, make foot available for a Claude Code session with
-`nix shell nixpkgs#foot --command claude`.
 
 Leave the dashboard running, open the `Url` it prints, and ask Claude
 Code to start a desktop, open foot, and take a screenshot. Select the
@@ -49,10 +123,8 @@ operation asks for approval, review the highlighted target and choose
 **Approve**, **Edit**, or **Reject**. Ask Claude Code to stop the desktop
 when you are done.
 
-To try sellaite without installing it, use `nix run
-github:conao3/rust-sellaite -- mcp serve-mcp` as the MCP server command. See
-[Use with Claude Code / Codex](#use-with-claude-code--codex) for configuration
-examples.
+See [Use with Claude Code / Codex](#use-with-claude-code--codex) for more
+configuration examples.
 
 ## MCP tools
 
@@ -110,7 +182,7 @@ through a short-lived decision file in the private runtime directory.
 ## Dashboard
 
 ```sh
-nix run github:conao3/rust-sellaite -- dashboard start-dashboard
+sellaite dashboard start-dashboard
 ```
 
 The dashboard listens on loopback (default `127.0.0.1:8730`, configurable with `--address`) and prints its startup URL as `{"Url": ...}`. Open that URL to exchange its access token for an HttpOnly browser cookie and redirect to the dashboard. Keep the startup URL private. By default, each start generates a new token. The dashboard lists the desktops that running `sellaite mcp serve-mcp` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode.
@@ -122,7 +194,7 @@ For an always-on dashboard, pass `--token-file /path/to/dashboard-token` in an e
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
 - Any input on your seat (`seat0`), for example from a VNC client connected to the desktop's `VncSocket`, also pauses the agent. sellaite watches `seat0` with ext-idle-notify-v1 (500 ms timeout); the agent's own input is on the `agent` seat and does not pause it.
 
-The dashboard serves noVNC from `--novnc-dir` or `SELLAITE_NOVNC_DIR` and proxies the browser's WebSocket to the desktop's wayvnc unix socket. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
+The dashboard serves noVNC from `--novnc-dir`, `SELLAITE_NOVNC_DIR` or `/usr/share/novnc`, in that order, and proxies the browser's WebSocket to the desktop's wayvnc unix socket. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
 
 ### Notes from the command line
 
@@ -162,22 +234,16 @@ fi
 
 ## Use with Claude Code / Codex
 
-The client opens applications with `launch`, which can execute any program available to the MCP server's user. See [Security](#security) for isolation guidance. Run the client where `sway`, `grim`, `wayvnc` and the applications you want (for example `foot`) are on `PATH`.
+The client opens applications with `launch`, which can execute any program available to the MCP server's user. See [Security](#security) for isolation guidance. Run the client where `sellaite`, its runtime dependencies and the applications you want (for example `foot`) are on `PATH`.
 
-Claude Code:
-
-```sh
-claude mcp add sellaite -- nix run github:conao3/rust-sellaite -- mcp serve-mcp
-```
-
-For a headless run, pass the server in a config file and allow only its tools:
+For a headless Claude Code run, pass the server in a config file and allow only its tools:
 
 ```json
 {
   "mcpServers": {
     "sellaite": {
-      "command": "nix",
-      "args": ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve-mcp"]
+      "command": "sellaite",
+      "args": ["mcp", "serve-mcp"]
     }
   }
 }
@@ -192,8 +258,8 @@ Codex (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.sellaite]
-command = "nix"
-args = ["run", "github:conao3/rust-sellaite", "--", "mcp", "serve-mcp"]
+command = "sellaite"
+args = ["mcp", "serve-mcp"]
 ```
 
 The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05.

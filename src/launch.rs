@@ -138,7 +138,7 @@ fn swaymsg(swaysock: &Path, args: &[&str]) -> Result<Value, String> {
         .arg(swaysock)
         .args(args)
         .output()
-        .map_err(|e| format!("cannot run swaymsg: {e}"))?;
+        .map_err(|e| format!("cannot run swaymsg (package: sway): {e}"))?;
     if !output.status.success() {
         return Err(format!(
             "swaymsg {args:?} failed: {}",

@@ -63,7 +63,7 @@ pub fn check(
         .and_then(Value::as_str)
         .unwrap_or("ordinary");
     let domain = args["domain"].as_str().unwrap_or("");
-    let target = accessibility(desktop, point);
+    let target = accessibility(desktop, point)?;
     let role = target["Role"].as_str().unwrap_or("");
     let name = target["Name"].as_str().unwrap_or("");
     let reason = match intent {
@@ -153,13 +153,13 @@ fn risky_button(role: &str, name: &str) -> bool {
         })
 }
 
-fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Value {
-    if std::env::var_os("SELLAITE_ATSPI_LIBRARY").is_none() {
-        return Value::Null;
-    }
+fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Value, String> {
+    let Some(library) = std::env::var_os("SELLAITE_ATSPI_LIBRARY") else {
+        return Ok(Value::Null);
+    };
     let info = desktop.info();
     let coords = point.map(|(x, y)| format!("{x},{y}")).unwrap_or_default();
-    std::process::Command::new("timeout")
+    let output = std::process::Command::new("timeout")
         .args([
             "0.75s",
             "python3",
@@ -169,8 +169,18 @@ fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Value {
             &coords,
         ])
         .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| serde_json::from_slice(&output.stdout).ok())
-        .unwrap_or(Value::Null)
+        .map_err(|e| format!("cannot run timeout (package: coreutils): {e}"))?;
+    match output.status.code() {
+        Some(0) => serde_json::from_slice(&output.stdout).map_err(|e| e.to_string()),
+        Some(126 | 127) => Err(format!(
+            "cannot run python3 (Ubuntu package: python3, Arch package: python): {}",
+            String::from_utf8_lossy(&output.stderr).trim_end()
+        )),
+        Some(78) => Err(format!(
+            "cannot load libatspi from SELLAITE_ATSPI_LIBRARY={}; install libatspi2.0-0t64 (Ubuntu) or at-spi2-core (Arch): {}",
+            library.to_string_lossy(),
+            String::from_utf8_lossy(&output.stderr).trim_end()
+        )),
+        _ => Ok(Value::Null),
+    }
 }

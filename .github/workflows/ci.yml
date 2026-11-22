@@ -13,3 +13,21 @@ jobs:
       - uses: cachix/install-nix-action@v31.11.5
       - run: nix develop --command make check
       - run: nix build
+  cargo-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        include:
+          - distro: ubuntu
+            image: ubuntu:26.04
+          - distro: arch
+            image: archlinux:base
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - env:
+          IMAGE: ${{ matrix.image }}
+          DISTRO: ${{ matrix.distro }}
+        run: |
+          docker run --rm --init --mount "type=bind,src=$PWD,dst=/src,readonly" \
+            "$IMAGE" bash /src/tests/install/setup.sh "$DISTRO"

@@ -135,15 +135,16 @@ pub async fn serve(
     allowed_logins: Option<Vec<String>>,
     token_file: Option<&Path>,
 ) -> Result<(), String> {
+    let novnc_hint = "install noVNC (Ubuntu package: novnc) and point --novnc-dir or SELLAITE_NOVNC_DIR at the directory containing core/rfb.js";
     let novnc_dir = novnc_dir.canonicalize().map_err(|e| {
         format!(
-            "cannot open the noVNC directory {}: {e}",
+            "cannot open the noVNC directory {}: {e}; {novnc_hint}",
             novnc_dir.display()
         )
     })?;
     if !novnc_dir.join("core/rfb.js").is_file() {
         return Err(format!(
-            "{} has no core/rfb.js; pass noVNC's directory with --novnc-dir",
+            "{} has no core/rfb.js; {novnc_hint}",
             novnc_dir.display()
         ));
     }

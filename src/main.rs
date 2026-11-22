@@ -144,7 +144,7 @@ enum DashboardCommand {
         #[arg(long, default_value = "127.0.0.1:8730", value_parser = address)]
         address: std::net::SocketAddr,
         /// noVNC's directory (the one that holds core/rfb.js)
-        #[arg(long, env = "SELLAITE_NOVNC_DIR", value_parser = OsStringValueParser::new().try_map(novnc_directory))]
+        #[arg(long, env = "SELLAITE_NOVNC_DIR", default_value = "/usr/share/novnc", value_parser = OsStringValueParser::new().try_map(novnc_directory))]
         novnc_dir: std::path::PathBuf,
         /// Origins a reverse proxy serves the dashboard under (for example
         /// `https://host.tailnet.ts.net:8731` from tailscale serve); their Host
