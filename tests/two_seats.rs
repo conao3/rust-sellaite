@@ -155,10 +155,20 @@ fn agent_input_stays_on_the_agent_seat() {
         b["rect"]["x"].as_i64().unwrap() < a["rect"]["x"].as_i64().unwrap(),
         "termB is not left of termA"
     );
-    sway.msg(&["bindsym Mod1+Tab focus right"]);
+    let rect = &a["rect"];
+    let x = rect["x"].as_u64().unwrap() + rect["width"].as_u64().unwrap() / 2;
+    let y = rect["y"].as_u64().unwrap() + rect["height"].as_u64().unwrap() / 2;
+    mcp.call("click", json!({"x": x, "y": y}));
+    wait_for("both seats to focus termA before alt+Tab", || {
+        (sway.seat_focus("agent") == id_a && sway.seat_focus("seat0") == id_a).then_some(())
+    });
+    assert_eq!(
+        sway.msg(&["bindsym Mod1+Tab focus left"])[0]["success"],
+        true
+    );
     mcp.call("key", json!({"keys": "alt+Tab"}));
-    wait_for("alt+Tab to move the agent seat to termA", || {
-        (sway.seat_focus("agent") == id_a).then_some(())
+    wait_for("alt+Tab to move the agent seat to termB", || {
+        (sway.seat_focus("agent") == id_b).then_some(())
     });
     assert_eq!(
         sway.seat_focus("seat0"),
@@ -166,10 +176,11 @@ fn agent_input_stays_on_the_agent_seat() {
         "alt+Tab on the agent seat moved the user seat"
     );
     mcp.call("type", json!({"text": "a"}));
-    wait_for("a in termA", || {
-        (std::fs::read_to_string(&log_a).unwrap() == "a").then_some(())
+    let text = format!("{text}a");
+    wait_for("a in termB", || {
+        (std::fs::read_to_string(&log_b).unwrap() == text).then_some(())
     });
-    assert_eq!(std::fs::read_to_string(&log_b).unwrap(), text);
+    assert_eq!(std::fs::read_to_string(&log_a).unwrap(), "");
 
     let shot = mcp.call("screenshot", json!({}));
     let image = &shot["content"][0];
@@ -190,4 +201,35 @@ fn agent_input_stays_on_the_agent_seat() {
     let _ = term_a.wait();
     let _ = term_b.wait();
     let _ = std::fs::remove_dir_all(&logs);
+}
+
+#[test]
+fn shift_and_super_chords_trigger_sway_bindings() {
+    let mut mcp = Mcp::spawn();
+    let info = mcp.call("start_desktop", json!({}))["structuredContent"].clone();
+    let sway = Sway {
+        swaysock: PathBuf::from(info["Swaysock"].as_str().unwrap()),
+    };
+    mcp.call(
+        "launch",
+        json!({"argv": ["foot", "sleep", "60"], "wait_for_window": true}),
+    );
+    for (binding, chord, mark) in [
+        ("Shift+F6", "shift+F6", "shift-chord"),
+        ("Mod4+F7", "super+F7", "super-chord"),
+    ] {
+        assert_eq!(
+            sway.msg(&[&format!("bindsym {binding} mark --add {mark}")])[0]["success"],
+            true
+        );
+        mcp.call("key", json!({"keys": chord}));
+        wait_for(chord, || {
+            sway.msg(&["-t", "get_marks"])
+                .as_array()
+                .unwrap()
+                .contains(&json!(mark))
+                .then_some(())
+        });
+    }
+    mcp.call("stop_desktop", json!({}));
 }

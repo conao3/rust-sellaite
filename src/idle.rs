@@ -90,16 +90,22 @@ impl Dispatch<ExtIdleNotificationV1, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        state.handle_idle_event(event);
+    }
+}
+
+impl State {
+    fn handle_idle_event(&self, event: ext_idle_notification_v1::Event) {
         match event {
             ext_idle_notification_v1::Event::Idled => {
-                runtime::set_user_idle(&state.runtime_dir, true);
+                runtime::set_user_idle(&self.runtime_dir, true);
             }
             ext_idle_notification_v1::Event::Resumed => {
-                let reason = format!("the user used their own seat ({})", state.seat_name);
-                if let Err(e) = runtime::pause(&state.runtime_dir, &reason) {
+                let reason = format!("the user used their own seat ({})", self.seat_name);
+                if let Err(e) = runtime::pause(&self.runtime_dir, &reason) {
                     eprintln!("sellaite: {e}");
                 }
-                runtime::set_user_idle(&state.runtime_dir, false);
+                runtime::set_user_idle(&self.runtime_dir, false);
             }
             _ => {}
         }
@@ -166,4 +172,31 @@ pub fn watch(socket: &Path, seat_name: &str, runtime_dir: &Path) -> Result<Watch
         stop,
         thread: Some(thread),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ext_idle_notification_v1::Event;
+
+    #[test]
+    fn idle_then_resume_updates_the_marker_and_pauses() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = State {
+            seats: Vec::new(),
+            runtime_dir: dir.path().to_path_buf(),
+            seat_name: "seat0".into(),
+        };
+
+        state.handle_idle_event(Event::Idled);
+        assert!(runtime::user_idle(dir.path()));
+        assert_eq!(runtime::paused(dir.path()), None);
+
+        state.handle_idle_event(Event::Resumed);
+        assert!(!runtime::user_idle(dir.path()));
+        assert_eq!(
+            runtime::paused(dir.path()).as_deref(),
+            Some("the user used their own seat (seat0)")
+        );
+    }
 }

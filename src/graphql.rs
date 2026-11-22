@@ -211,3 +211,23 @@ impl Mutation {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_status_reads_pause_idle_and_notes_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        runtime::pause(dir.path(), "paused for review").unwrap();
+        runtime::set_user_idle(dir.path(), true);
+        runtime::add_note(dir.path(), "review this").unwrap();
+
+        let desktop = Desktop::read("Ab1234", dir.path());
+        assert_eq!(desktop.id, "Ab1234");
+        assert!(desktop.paused);
+        assert_eq!(desktop.paused_reason.as_deref(), Some("paused for review"));
+        assert!(desktop.user_seat_idle);
+        assert_eq!(desktop.pending_notes, 1);
+    }
+}

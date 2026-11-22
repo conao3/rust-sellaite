@@ -184,3 +184,24 @@ fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Value, 
         _ => Ok(Value::Null),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_edit_publishes_the_replacement_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = json!({"Id": "123", "Tool": "type"});
+        fs::write(dir.path().join(PENDING), request.to_string()).unwrap();
+        let decision_dir = dir.path().join("approval-123");
+        fs::create_dir(&decision_dir).unwrap();
+        let decision = json!({"Action": "edit", "Text": "été\n日本"});
+
+        decide(dir.path(), "123", &decision).unwrap();
+
+        let written = fs::read(decision_dir.join("decision")).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&written).unwrap(), decision);
+        assert_eq!(pending(dir.path()), Some(request));
+    }
+}

@@ -251,3 +251,26 @@ fn keymap_fd(source: &str) -> Result<OwnedFd, String> {
         .map_err(|e| format!("cannot write the keymap: {e}"))?;
     Ok(OwnedFd::from(file))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Seek};
+
+    #[test]
+    fn button_names_map_to_linux_input_codes() {
+        for (name, code) in [("left", 0x110), ("right", 0x111), ("middle", 0x112)] {
+            assert_eq!(Button::parse(name).unwrap().code(), code);
+        }
+        assert!(Button::parse("scroll").is_err());
+    }
+
+    #[test]
+    fn keymap_fd_contains_source_and_nul_terminator() {
+        let mut file = std::fs::File::from(keymap_fd("xkb_keymap {};").unwrap());
+        file.rewind().unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"xkb_keymap {};\0");
+    }
+}
