@@ -1,4 +1,5 @@
 use std::io::{BufRead, Write};
+use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{Value, json};
@@ -10,6 +11,9 @@ use crate::input::Button;
 const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_WIDTH: u32 = 1280;
 const DEFAULT_HEIGHT: u32 = 720;
+const DEFAULT_WINDOW_TIMEOUT_MS: u64 = 10_000;
+const MAX_WINDOW_TIMEOUT_MS: u64 = 60_000;
+const MAX_WAIT_MS: u64 = 30_000;
 
 #[derive(Default)]
 pub struct Server {
@@ -20,7 +24,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "start_desktop",
-            "description": "Start the agent's own headless desktop (sway) with an agent seat and a user seat. The agent's clicks and keystrokes go only to the agent seat. The user watches the desktop in the sellaite dashboard and can pause the agent; while it is paused, click, type and key return an error. The result gives WAYLAND_DISPLAY, XDG_RUNTIME_DIR and SWAYSOCK for launching applications inside the desktop.",
+            "description": "Start the agent's own headless desktop (sway) with an agent seat and a user seat. The agent's clicks and keystrokes go only to the agent seat. The user watches the desktop in the sellaite dashboard and can pause the agent; while it is paused, launch, click, type and key return an error. Open applications in it with launch.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -34,6 +38,30 @@ fn tools() -> Value {
             "name": "stop_desktop",
             "description": "Stop the desktop and every application running in it.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
+        },
+        {
+            "name": "launch",
+            "description": "Start a program inside the desktop, detached, with the desktop's WAYLAND_DISPLAY, XDG_RUNTIME_DIR and SWAYSOCK. stop_desktop stops it and every process it started. With wait_for_window, returns after a window of the program (or of a process it started) has mapped; a new window gets the agent seat's keyboard focus, so type and key can follow without a click. Returns Pid and, when waited, Window (Id, AppId, Pid, Name).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "The program and its arguments, such as [\"foot\"]; no shell is involved"},
+                    "wait_for_window": {"type": "boolean", "description": "Wait until a window has mapped (default false)"},
+                    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": MAX_WINDOW_TIMEOUT_MS, "description": "How long to wait for the window (default 10000)"}
+                },
+                "required": ["argv"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "wait",
+            "description": "Sleep for the given number of milliseconds (at most 30000), for example to let an application finish drawing before a screenshot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"milliseconds": {"type": "integer", "minimum": 0, "maximum": MAX_WAIT_MS}},
+                "required": ["milliseconds"],
+                "additionalProperties": false
+            }
         },
         {
             "name": "screenshot",
@@ -83,6 +111,19 @@ fn text_result(text: String) -> Value {
 
 fn error_result(message: String) -> Value {
     json!({"content": [{"type": "text", "text": message}], "isError": true})
+}
+
+fn bounded(args: &Value, key: &str, default: Option<u64>, max: u64) -> Result<u64, String> {
+    let value = match args.get(key) {
+        None | Some(Value::Null) => default.ok_or_else(|| format!("{key} is required"))?,
+        Some(v) => v
+            .as_u64()
+            .ok_or_else(|| format!("{key} must be a non-negative integer"))?,
+    };
+    if value > max {
+        return Err(format!("{key} must be at most {max}"));
+    }
+    Ok(value)
 }
 
 fn dimension(args: &Value, key: &str, default: u32) -> Result<u32, String> {
@@ -141,6 +182,53 @@ impl Server {
                     .take()
                     .ok_or_else(|| "no desktop is running".to_string())?;
                 Ok(text_result("stopped".into()))
+            }
+            "launch" => {
+                let argv: Vec<String> = args
+                    .get("argv")
+                    .and_then(Value::as_array)
+                    .and_then(|items| {
+                        items
+                            .iter()
+                            .map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .ok_or_else(|| "argv must be an array of strings".to_string())?;
+                let wait = match args.get("wait_for_window") {
+                    None | Some(Value::Null) => false,
+                    Some(v) => v
+                        .as_bool()
+                        .ok_or_else(|| "wait_for_window must be a boolean".to_string())?,
+                };
+                let timeout = bounded(
+                    args,
+                    "timeout_ms",
+                    Some(DEFAULT_WINDOW_TIMEOUT_MS),
+                    MAX_WINDOW_TIMEOUT_MS,
+                )?;
+                if timeout == 0 {
+                    return Err("timeout_ms must be positive".into());
+                }
+                let launched = self
+                    .input_desktop()?
+                    .launch(&argv, wait.then(|| Duration::from_millis(timeout)))?;
+                let mut body = json!({"Pid": launched.pid, "Log": launched.log});
+                if let Some(window) = launched.window {
+                    body["Window"] = json!({
+                        "Id": window["id"],
+                        "AppId": window["app_id"],
+                        "Pid": window["pid"],
+                        "Name": window["name"],
+                    });
+                }
+                let mut result = text_result(body.to_string());
+                result["structuredContent"] = body;
+                Ok(result)
+            }
+            "wait" => {
+                let ms = bounded(args, "milliseconds", None, MAX_WAIT_MS)?;
+                std::thread::sleep(Duration::from_millis(ms));
+                Ok(text_result(format!("waited {ms} ms")))
             }
             "screenshot" => {
                 let png = self.desktop()?.screenshot()?;
@@ -261,6 +349,8 @@ mod tests {
             [
                 "start_desktop",
                 "stop_desktop",
+                "launch",
+                "wait",
                 "screenshot",
                 "click",
                 "type",
@@ -279,6 +369,23 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(response["result"]["isError"], true);
+    }
+
+    #[test]
+    fn wait_is_capped() {
+        let mut server = Server::default();
+        let mut call = |ms: u64| {
+            server
+                .handle(&json!({
+                    "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                    "params": {"name": "wait", "arguments": {"milliseconds": ms}}
+                }))
+                .unwrap()["result"]
+                .clone()
+        };
+        assert_eq!(call(1)["content"][0]["text"], "waited 1 ms");
+        let over = call(MAX_WAIT_MS + 1);
+        assert_eq!(over["isError"], true, "{over}");
     }
 
     #[test]

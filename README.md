@@ -4,7 +4,7 @@ Give an AI computer-use agent its own Linux desktop and its own cursor, so it ne
 
 Each agent runs in its own headless Wayland session (sway). Inside that session the agent has its own input seat: its own pointer and keyboard focus. A second seat is reserved for you, so you can watch the agent's desktop in the browser and step in when needed without fighting it for the mouse. Several agents can run side by side, each on its own desktop.
 
-The agent talks to sellaite over MCP (`start_desktop`, `screenshot`, `click`, `type`, ...), so it works with Claude Code, Codex and other MCP clients.
+The agent talks to sellaite over MCP (`start_desktop`, `launch`, `screenshot`, `click`, `type`, ...), so it works with Claude Code, Codex and other MCP clients.
 
 The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
@@ -27,7 +27,9 @@ Tools:
 | Tool | Arguments | What it does |
 |---|---|---|
 | `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with two seats, `agent` for the agent and `seat0` for you, and a VNC server (wayvnc) on `seat0`. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
-| `stop_desktop` | | Stops sway and every application in the desktop. |
+| `stop_desktop` | | Stops sway, every process `launch` started (and the processes they started), and every application in the desktop. |
+| `launch` | `argv`, `wait_for_window` (default false), `timeout_ms` (default 10000, at most 60000) | Starts a program in the desktop, detached, with the desktop's `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`, and returns its `Pid`. With `wait_for_window`, returns once a window of the program or of a process it started has mapped, with `Window` (`Id`, `AppId`, `Pid`, `Name`), or an error when the program exits first or the timeout passes. |
+| `wait` | `milliseconds` (at most 30000) | Sleeps. |
 | `screenshot` | | Returns the whole desktop as a PNG image. |
 | `click` | `x`, `y`, `button` (`left`, `right`, `middle`) | Moves the agent's pointer and clicks. |
 | `type` | `text` | Types the text into the window that has the agent's keyboard focus. |
@@ -35,13 +37,9 @@ Tools:
 
 The agent's clicks and keystrokes come from a virtual pointer and a virtual keyboard created on the `agent` seat, so they move only that seat's cursor and focus. Your seat keeps its own focus.
 
-While the agent is paused, `click`, `type` and `key` return an error that says the user paused it; `screenshot` and `stop_desktop` still work.
+While the agent is paused, `launch`, `click`, `type` and `key` return an error that says the user paused it; `screenshot`, `wait` and `stop_desktop` still work.
 
-To open an application in the desktop, run it with the environment that `start_desktop` returned:
-
-```sh
-XDG_RUNTIME_DIR=<XdgRuntimeDir> WAYLAND_DISPLAY=<WaylandDisplay> foot &
-```
+A window that maps gets the keyboard focus of both seats, so after `launch` with `wait_for_window` the agent can `type` into it without a click; text typed before the window maps is lost. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and marks it and everything it starts with `SELLAITE_DESKTOP=<Id>` in the environment; `stop_desktop` stops every process that carries the mark.
 
 ## Dashboard
 
@@ -60,7 +58,7 @@ The dashboard serves noVNC from `--novnc-dir` (or `SELLAITE_NOVNC_DIR`; the Nix 
 
 ## Use with Claude Code / Codex
 
-The tools act on the desktop only; the client opens applications in it with its shell tool, using the `XdgRuntimeDir` and `WaylandDisplay` that `start_desktop` returned. Run the client where `sway`, `grim`, `wayvnc` and the applications you want (for example `foot`) are on `PATH`.
+The client needs no shell tool: it opens applications with `launch`. Run the client where `sway`, `grim`, `wayvnc` and the applications you want (for example `foot`) are on `PATH`.
 
 Claude Code:
 
@@ -68,7 +66,7 @@ Claude Code:
 claude mcp add sellaite -- nix run github:conao3/rust-sellaite -- mcp serve
 ```
 
-For a headless run, pass the server in a config file and allow its tools and the shell:
+For a headless run, pass the server in a config file and allow only its tools:
 
 ```json
 {
@@ -82,17 +80,9 @@ For a headless run, pass the server in a config file and allow its tools and the
 ```
 
 ```sh
-claude -p "Start a desktop, open foot, type 'echo hello', press Return, take a screenshot and stop the desktop." \
-  --mcp-config sellaite.json --allowedTools 'mcp__sellaite__*' Bash
+claude -p "Start a desktop, launch foot and wait for its window, type 'echo hello', press Return, take a screenshot and stop the desktop." \
+  --mcp-config sellaite.json --strict-mcp-config --allowedTools 'mcp__sellaite__*' --disallowedTools Bash
 ```
-
-The client opens foot with a command such as:
-
-```sh
-XDG_RUNTIME_DIR=<XdgRuntimeDir> WAYLAND_DISPLAY=<WaylandDisplay> setsid foot >/dev/null 2>&1 &
-```
-
-A fresh foot window has no keyboard focus on the agent seat until the agent clicks it.
 
 Codex (`~/.codex/config.toml`):
 

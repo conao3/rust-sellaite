@@ -29,7 +29,9 @@ user's cursor or focus. See `README.md` for the goal.
   the single bounds check in `SeatInput::click`. The generated sources are cached in
   `.leanfran/cache/` and the Lean package in `lean/`; commit both. The Nix
   build sets `LEANFRAN_OFFLINE=1` and uses the cache only.
-- Rust owns process management (sway, wayvnc), the Wayland protocol clients
+- Rust owns process management (sway, wayvnc, and the programs of `launch`,
+  which `src/launch.rs` finds by `SELLAITE_DESKTOP=<Id>` in `/proc/<pid>/environ`
+  and waits for through sway IPC window events), the Wayland protocol clients
   (virtual pointer and keyboard, screen capture, the ext-idle-notify-v1 watcher
   of `seat0`), the MCP server, the dashboard (HTTP, the WebSocket proxy to
   wayvnc), and the CLI (`clap`).
@@ -147,6 +149,11 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   only the agent seat's focus. `nix build`
   runs it in the sandbox, so `nativeCheckInputs` carries `sway-unwrapped`,
   `grim` and `foot`, and `FONTCONFIG_FILE` points at a fixed font set.
+- `tests/launch.rs` launches foot with `wait_for_window`, checks that the
+  window has the agent seat's focus, types a command and presses `Return`
+  with no sleep, and checks that `stop_desktop` ends foot, its shell and an
+  orphaned `sleep`. Typing without the window wait loses the text, and the
+  stop check fails when `stop_desktop` signals only the direct children.
 - `tests/dashboard.rs` checks pause end to end: stale runtime directories
   are removed when `mcp serve` starts, the agent's `click`, `type` and `key`
   leave `seat0` idle, a raw RFB client on `vnc.sock` that only connects does

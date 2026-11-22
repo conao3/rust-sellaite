@@ -4,6 +4,7 @@ mod desktop;
 mod idle;
 mod input;
 mod keymap;
+mod launch;
 mod mcp;
 mod runtime;
 

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use crate::chord::Chord;
 use crate::idle;
 use crate::input::{Button, SeatInput};
+use crate::launch::{self, WindowEvents};
 use crate::runtime;
 
 pub const AGENT_SEAT: &str = "agent";
@@ -14,6 +15,10 @@ pub const AGENT_SEAT: &str = "agent";
 pub const USER_SEAT: &str = "seat0";
 
 const START_TIMEOUT: Duration = Duration::from_secs(20);
+
+const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+const LAUNCH_LOG: &str = "launch.log";
 
 pub struct Desktop {
     runtime_dir: PathBuf,
@@ -25,6 +30,13 @@ pub struct Desktop {
     width: u32,
     height: u32,
     input: SeatInput,
+    launched: Vec<Child>,
+}
+
+pub struct Launched {
+    pub pid: u32,
+    pub window: Option<serde_json::Value>,
+    pub log: PathBuf,
 }
 
 pub struct Info {
@@ -80,7 +92,7 @@ fn stop_child(child: &mut Child) {
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + STOP_TIMEOUT;
     while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -173,6 +185,7 @@ impl Desktop {
             width,
             height,
             input,
+            launched: Vec::new(),
         };
         desktop.watch_user_seat()?;
         runtime::write_state(
@@ -255,6 +268,101 @@ impl Desktop {
         self.input.key(chord)
     }
 
+    pub fn launch(&mut self, argv: &[String], wait: Option<Duration>) -> Result<Launched, String> {
+        let (program, args) = argv
+            .split_first()
+            .ok_or_else(|| "argv must name a program".to_string())?;
+        self.launched
+            .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+        let mut events = wait
+            .map(|_| WindowEvents::subscribe(&self.swaysock))
+            .transpose()?;
+        let log_path = self.runtime_dir.join(LAUNCH_LOG);
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|e| format!("cannot open {}: {e}", log_path.display()))?;
+        let id = runtime::id_of(&self.runtime_dir)
+            .unwrap_or_default()
+            .to_string();
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .env("XDG_RUNTIME_DIR", &self.runtime_dir)
+            .env("WAYLAND_DISPLAY", &self.wayland_display)
+            .env("SWAYSOCK", &self.swaysock)
+            .env(launch::MARKER, id)
+            .env_remove("DISPLAY")
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log);
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let child = spawn_child(&mut command, program)?;
+        let pid = child.id();
+        self.launched.push(child);
+        let child = self.launched.last_mut().unwrap();
+        let window = match (events.as_mut(), wait) {
+            (Some(events), Some(timeout)) => {
+                let deadline = Instant::now() + timeout;
+                loop {
+                    if let Some(window) = events.new_window_of(pid, deadline)? {
+                        break Some(window);
+                    }
+                    if let Ok(Some(status)) = child.try_wait() {
+                        return Err(format!(
+                            "{program} (pid {pid}) exited with {status} before a window mapped; its output is in {}",
+                            log_path.display()
+                        ));
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!(
+                            "{program} (pid {pid}) is running but mapped no window within {} ms; stop_desktop stops it",
+                            timeout.as_millis()
+                        ));
+                    }
+                }
+            }
+            _ => None,
+        };
+        Ok(Launched {
+            pid,
+            window,
+            log: log_path,
+        })
+    }
+
+    fn stop_launched(&mut self) {
+        let Some(id) = runtime::id_of(&self.runtime_dir).map(str::to_string) else {
+            return;
+        };
+        launch::signal(&launch::marked(&id), libc::SIGTERM);
+        let deadline = Instant::now() + STOP_TIMEOUT;
+        loop {
+            self.launched
+                .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+            let left = launch::marked(&id);
+            if left.is_empty() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                launch::signal(&left, libc::SIGKILL);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for child in &mut self.launched {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.launched.clear();
+    }
+
     pub fn screenshot(&self) -> Result<Vec<u8>, String> {
         let output = Command::new("grim")
             .args(["-t", "png", "-"])
@@ -276,6 +384,7 @@ impl Desktop {
 
 impl Drop for Desktop {
     fn drop(&mut self) {
+        self.stop_launched();
         self.watcher = None;
         if let Some(wayvnc) = self.wayvnc.as_mut() {
             stop_child(wayvnc);
