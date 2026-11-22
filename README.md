@@ -113,7 +113,9 @@ through a short-lived decision file in the private runtime directory.
 nix run github:conao3/rust-sellaite -- dashboard start-dashboard
 ```
 
-The dashboard listens on loopback (default `127.0.0.1:8730`, configurable with `--address`) and prints its startup URL as `{"Url": ...}`. Open that URL to exchange its access token for an HttpOnly browser cookie and redirect to the dashboard. Keep the startup URL private and open the new one after each restart. The dashboard lists the desktops that running `sellaite mcp serve-mcp` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode.
+The dashboard listens on loopback (default `127.0.0.1:8730`, configurable with `--address`) and prints its startup URL as `{"Url": ...}`. Open that URL to exchange its access token for an HttpOnly browser cookie and redirect to the dashboard. Keep the startup URL private. By default, each start generates a new token. The dashboard lists the desktops that running `sellaite mcp serve-mcp` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode.
+
+For an always-on dashboard, pass `--token-file /path/to/dashboard-token` in an existing private directory. The dashboard creates a missing file with mode `0600` and refuses files with group or other permissions. With the same token file and listening address, the startup URL and existing browser cookies continue to work across restarts.
 
 - **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
 - **Take over** pauses agent input and grants control to the current tab. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, resumes the agent, and queues a screenshot reminder.
@@ -143,7 +145,16 @@ sellaite dashboard start-dashboard \
   --allowed-logins you@example.com
 ```
 
-`--public-origins` adds the HTTPS origins the proxy serves the dashboard under and prints their token-bearing startup URLs in `PublicUrls`. Open the matching URL through Tailscale Serve. For a systemd service, retrieve it from the service's startup output and keep that output private. The browser receives a Secure cookie on HTTPS.
+`--public-origins` adds the HTTPS origins the proxy serves the dashboard under and prints their token-bearing startup URLs in `PublicUrls`. Open the matching URL through Tailscale Serve. The browser receives a Secure cookie on HTTPS.
+
+For a systemd service using `--token-file`, you can reconstruct its public URL in a private terminal. Set `public_origin` to one of the configured HTTPS origins and `token_file` to the service's token file before running the following command.
+
+```sh
+if token=$(cat -- "$token_file"); then
+  printf '%s/?token=%s\n' "$public_origin" "$token"
+  unset token
+fi
+```
 
 `--public-origins` requires `--allowed-logins`. Every request, including the startup URL, must carry an allowed [`Tailscale-User-Login`](https://tailscale.com/kb/1312/serve#identity-headers) in addition to the dashboard credential. Tailscale Serve derives that header from the requesting machine's tailnet identity. Requests without an allowed login receive 403.
 

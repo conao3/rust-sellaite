@@ -1,6 +1,8 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::fs::OpenOptions;
+use std::io::{self, Read, Write};
 use std::net::SocketAddr;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -131,6 +133,7 @@ pub async fn serve(
     novnc_dir: &Path,
     public_origins: &[String],
     allowed_logins: Option<Vec<String>>,
+    token_file: Option<&Path>,
 ) -> Result<(), String> {
     let novnc_dir = novnc_dir.canonicalize().map_err(|e| {
         format!(
@@ -158,9 +161,11 @@ pub async fn serve(
     if !allowed_hosts.contains(&local_host) {
         allowed_hosts.push(local_host);
     }
-    let mut secret = [0u8; 32];
-    getrandom::fill(&mut secret).map_err(|e| format!("cannot generate a dashboard token: {e}"))?;
-    let token = URL_SAFE_NO_PAD.encode(secret);
+    let token = match token_file {
+        Some(path) => persistent_token(path)
+            .map_err(|e| format!("cannot use dashboard token file {}: {e}", path.display()))?,
+        None => generate_token().map_err(|e| format!("cannot generate a dashboard token: {e}"))?,
+    };
     let url = format!("http://{local}/?token={token}");
     let mut sites: Vec<Site> = allowed_hosts
         .into_iter()
@@ -208,6 +213,62 @@ pub async fn serve(
         ))
         .with_state(config);
     axum::serve(listener, app).await.map_err(|e| e.to_string())
+}
+
+fn generate_token() -> io::Result<String> {
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).map_err(io::Error::other)?;
+    Ok(URL_SAFE_NO_PAD.encode(secret))
+}
+
+fn persistent_token(path: &Path) -> io::Result<String> {
+    match read_token(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        result => return result,
+    }
+    let token = generate_token()?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // Publish the complete token without replacing a concurrent starter's token.
+    let mut file = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o600))
+        .tempfile_in(parent)?;
+    file.as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    writeln!(file, "{token}")?;
+    file.as_file().sync_all()?;
+    match file.persist_noclobber(path) {
+        Ok(_) => Ok(token),
+        Err(e) if e.error.kind() == io::ErrorKind::AlreadyExists => read_token(path),
+        Err(e) => Err(e.error),
+    }
+}
+
+fn read_token(path: &Path) -> io::Result<String> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "expected a regular file with no group or other permissions (chmod 600)",
+        ));
+    }
+    // A 32-byte base64url token is 43 characters, with an optional newline.
+    let mut text = String::new();
+    file.take(45).read_to_string(&mut text)?;
+    let token = text.strip_suffix('\n').unwrap_or(&text);
+    if !matches!(URL_SAFE_NO_PAD.decode(token), Ok(bytes) if bytes.len() == 32) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected a 32-byte base64url token",
+        ));
+    }
+    Ok(token.to_owned())
 }
 
 async fn authorize_request(

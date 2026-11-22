@@ -1,5 +1,7 @@
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Stdio};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -17,15 +19,12 @@ struct Dashboard {
 
 impl Dashboard {
     fn spawn(extra: &[&str]) -> Self {
-        let novnc = std::env::temp_dir().join(format!("sellaite-novnc-{}", std::process::id()));
-        std::fs::create_dir_all(novnc.join("core")).unwrap();
-        std::fs::write(novnc.join("core/rfb.js"), "").unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_sellaite"))
-            .args(["dashboard", "serve", "--address", "127.0.0.1:0"])
-            .arg("--novnc-dir")
-            .arg(&novnc)
+        Self::spawn_at("127.0.0.1:0", extra)
+    }
+
+    fn spawn_at(address: &str, extra: &[&str]) -> Self {
+        let mut child = dashboard_command(address)
             .args(extra)
-            .stdout(Stdio::piped())
             .spawn()
             .expect("start the dashboard");
         let mut line = String::new();
@@ -70,6 +69,18 @@ impl Dashboard {
     fn status(&self, method: &str, path: &str, headers: &[(&str, &str)]) -> u16 {
         self.request(method, path, headers).0
     }
+}
+
+fn dashboard_command(address: &str) -> Command {
+    let novnc = std::env::temp_dir().join(format!("sellaite-novnc-{}", std::process::id()));
+    fs::create_dir_all(novnc.join("core")).unwrap();
+    fs::write(novnc.join("core/rfb.js"), "").unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sellaite"));
+    command
+        .args(["dashboard", "serve", "--address", address, "--novnc-dir"])
+        .arg(novnc)
+        .stdout(Stdio::piped());
+    command
 }
 
 impl Drop for Dashboard {
@@ -223,6 +234,74 @@ fn the_dashboard_rejects_another_starts_token() {
             "set-cookie: sellaite-{port}={}; Path=/; HttpOnly; SameSite=Lax",
             dashboard.token
         )));
+}
+
+#[test]
+fn token_file_preserves_the_public_url_and_cookie_across_restarts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("token");
+    let args = [
+        "--public-origins",
+        PUBLIC_ORIGIN,
+        "--allowed-logins",
+        LOGIN,
+        "--token-file",
+        path.to_str().unwrap(),
+    ];
+    let first = Dashboard::spawn(&args);
+    let address = first.address.clone();
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let bootstrap = format!("/?token={}", first.token);
+    let public = ("Host", PUBLIC_HOST);
+    let owner = ("Tailscale-User-Login", LOGIN);
+    let (status, headers) = first.request("GET", &bootstrap, &[public, owner]);
+    assert_eq!(status, 303);
+    let cookie = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("set-cookie: "))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    drop(first);
+
+    let second = Dashboard::spawn_at(&address, &args);
+    assert_eq!(
+        second.status("GET", "/", &[public, owner, ("Cookie", cookie)]),
+        200
+    );
+    assert_eq!(second.status("GET", &bootstrap, &[public, owner]), 303);
+    assert_eq!(second.status("GET", "/", &[public, owner]), 403);
+}
+
+#[test]
+fn token_file_must_be_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("token");
+    let args = ["--token-file", path.to_str().unwrap()];
+    drop(Dashboard::spawn(&args));
+
+    for mode in [0o640, 0o604] {
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        let mut child = dashboard_command("127.0.0.1:0")
+            .args(args)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut startup = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut startup)
+            .unwrap();
+        if !startup.is_empty() {
+            child.kill().unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(255), "file mode {mode:o}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("chmod 600"));
+    }
 }
 
 #[test]

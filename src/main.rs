@@ -155,6 +155,9 @@ enum DashboardCommand {
         /// dashboard; every other request gets 403
         #[arg(long, num_args = 1.., value_parser = login)]
         allowed_logins: Option<Vec<String>>,
+        /// Read or create a private token file to keep the URL valid across restarts
+        #[arg(long)]
+        token_file: Option<std::path::PathBuf>,
     },
 }
 
@@ -299,9 +302,16 @@ fn main() {
                     novnc_dir,
                     public_origins,
                     allowed_logins,
+                    token_file,
                 },
         } => {
-            if let Err(e) = dashboard::serve(address, &novnc_dir, &public_origins, allowed_logins) {
+            if let Err(e) = dashboard::serve(
+                address,
+                &novnc_dir,
+                &public_origins,
+                allowed_logins,
+                token_file.as_deref(),
+            ) {
                 eprintln!("sellaite: {e}");
                 std::process::exit(EXIT_FAILURE);
             }
