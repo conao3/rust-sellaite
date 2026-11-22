@@ -131,6 +131,21 @@ fn launch_opens_a_focused_window_and_stop_desktop_ends_every_launched_process() 
     let message = error_text(&mut mcp, "launch", json!({"argv": []}));
     assert!(message.contains("argv"), "{message}");
 
+    let user_focus = seat_focus(&swaysock, "seat0");
+    let second = mcp.call(
+        "launch",
+        json!({"argv": ["foot", "--app-id", "second", "sh"], "wait_for_window": true}),
+    );
+    assert_eq!(seat_focus(&swaysock, "seat0"), user_focus);
+    assert_eq!(
+        seat_focus(&swaysock, "agent"),
+        second["structuredContent"]["Window"]["Id"]
+            .as_i64()
+            .unwrap()
+    );
+    let stable = mcp.call("wait_for_stable_screen", json!({"quiet_ms": 500}));
+    println!("{}", stable["content"][0]["text"]);
+
     let shells = children_of(foot);
     assert!(!shells.is_empty(), "foot has no shell");
     let before = marked(&id);

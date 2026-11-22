@@ -278,9 +278,8 @@ impl Desktop {
             .ok_or_else(|| "argv must name a program".to_string())?;
         self.launched
             .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
-        let mut events = wait
-            .map(|_| WindowEvents::subscribe(&self.swaysock))
-            .transpose()?;
+        let mut events = WindowEvents::subscribe(&self.swaysock)?;
+        let user_focus = launch::user_focus(&self.swaysock)?;
         let log_path = self.runtime_dir.join(LAUNCH_LOG);
         let log = fs::OpenOptions::new()
             .create(true)
@@ -311,11 +310,12 @@ impl Desktop {
         let pid = child.id();
         self.launched.push(child);
         let child = self.launched.last_mut().unwrap();
-        let window = match (events.as_mut(), wait) {
-            (Some(events), Some(timeout)) => {
+        let window = match wait {
+            Some(timeout) => {
                 let deadline = Instant::now() + timeout;
                 loop {
                     if let Some(window) = events.new_window_of(pid, deadline)? {
+                        launch::restore_user_focus(&self.swaysock, user_focus, &window)?;
                         break Some(window);
                     }
                     if let Ok(Some(status)) = child.try_wait() {
@@ -332,7 +332,29 @@ impl Desktop {
                     }
                 }
             }
-            _ => None,
+            None => {
+                if user_focus.is_some() {
+                    let swaysock = self.swaysock.clone();
+                    std::thread::spawn(move || {
+                        let deadline = Instant::now() + Duration::from_secs(60);
+                        while Instant::now() < deadline && launch::running(pid) {
+                            match events.new_window_of(pid, deadline) {
+                                Ok(Some(window)) => {
+                                    if let Err(e) =
+                                        launch::restore_user_focus(&swaysock, user_focus, &window)
+                                    {
+                                        eprintln!("sellaite: {e}");
+                                    }
+                                    break;
+                                }
+                                Ok(None) => {}
+                                Err(_) => break,
+                            }
+                        }
+                    });
+                }
+                None
+            }
         };
         Ok(Launched {
             pid,

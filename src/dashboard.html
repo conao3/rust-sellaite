@@ -164,6 +164,7 @@ button.send { background: var(--accent); color: var(--accent-text); }
       <div class="toolbar">
         <div class="status" id="status" role="status"></div>
         <button class="stop" id="stop" type="button">Stop the agent</button>
+        <button id="takeover" type="button">Take over</button>
         <button class="resume" id="resume" type="button">Resume</button>
       </div>
       <form class="compose" id="compose">
@@ -192,6 +193,7 @@ let rfb = null;
 let connectedId = null;
 let busy = false;
 let sending = false;
+let takeoverId = null;
 let shownDraft = null;
 const drafts = new Map();
 
@@ -219,7 +221,7 @@ function connect(id) {
   rfb.scaleViewport = true;
   rfb.focusOnClick = false;
   rfb.addEventListener("connect", () => {
-    $("connection").textContent = "Watching (view only: the page sends no input to the desktop).";
+    $("connection").textContent = "Connected.";
   });
   rfb.addEventListener("disconnect", (e) => {
     $("connection").textContent = e.detail.clean ? "Disconnected." : "The connection to the desktop was lost.";
@@ -278,10 +280,18 @@ function render() {
     : " The agent can click, type and press keys."));
   $("stop").disabled = busy || desktop.Paused;
   $("stop").title = desktop.Paused ? "The agent is already paused." : "Pause the agent: its input tools return an error until you resume it.";
-  $("resume").disabled = busy || !desktop.Paused;
+  $("resume").disabled = busy || !desktop.Paused || desktop.TakingOver;
   $("resume").title = desktop.Paused ? "Let the agent use its input tools again." : "The agent is not paused.";
   renderCompose(desktop);
   connect(desktop.Id);
+  if (!desktop.TakingOver && takeoverId === desktop.Id) takeoverId = null;
+  $("takeover").disabled = busy;
+  $("takeover").textContent = desktop.TakingOver ? "Give back" : "Take over";
+  if (rfb) {
+    const input = desktop.TakingOver && takeoverId === desktop.Id;
+    rfb.viewOnly = !input;
+    rfb.focusOnClick = input;
+  }
 }
 
 function renderCompose(desktop) {
@@ -342,6 +352,7 @@ async function refresh() {
 
 async function act(action) {
   const id = selectedId();
+  if (action === "give-back") takeoverId = null;
   busy = true;
   render();
   $("action-error").hidden = true;
@@ -349,9 +360,10 @@ async function act(action) {
     const response = await fetch(`/api/desktops/${id}/${action}`, { method: "POST" });
     const body = await response.json();
     if (!response.ok) throw new Error(body.Error || `HTTP ${response.status}`);
+    if (action === "take-over") takeoverId = id;
     desktops = desktops.map((d) => (d.Id === id ? body : d));
   } catch (e) {
-    $("action-error").textContent = `Could not ${action === "pause" ? "stop" : "resume"} the agent: ${e.message}`;
+    $("action-error").textContent = `Could not ${action.replace("-", " ")}: ${e.message}`;
     $("action-error").hidden = false;
   } finally {
     busy = false;
@@ -363,6 +375,10 @@ $("compose").addEventListener("submit", (e) => { e.preventDefault(); sendNote();
 $("note-text").addEventListener("input", render);
 $("note-text").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendNote(); }
+});
+$("takeover").addEventListener("click", () => {
+  const desktop = desktops.find((d) => d.Id === selectedId());
+  if (desktop) act(desktop.TakingOver ? "give-back" : "take-over");
 });
 $("stop").addEventListener("click", () => act("pause"));
 $("resume").addEventListener("click", () => act("resume"));

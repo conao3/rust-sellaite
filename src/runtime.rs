@@ -89,7 +89,27 @@ pub fn resume(dir: &Path) -> Result<(), String> {
     }
 }
 
+pub fn taking_over(dir: &Path) -> bool {
+    dir.join("takeover").exists()
+}
+
+pub fn take_over(dir: &Path) -> Result<(), String> {
+    fs::write(dir.join("takeover"), b"").map_err(|e| format!("cannot take over: {e}"))
+}
+
+pub fn give_back(dir: &Path) -> Result<(), String> {
+    add_note(
+        dir,
+        "The user changed the screen. Take a screenshot before acting.",
+    )?;
+    resume(dir)?;
+    fs::remove_file(dir.join("takeover")).map_err(|e| format!("cannot give back: {e}"))
+}
+
 pub fn paused(dir: &Path) -> Option<String> {
+    if taking_over(dir) {
+        return Some("the user has taken over the desktop".into());
+    }
     fs::read_to_string(dir.join(PAUSED_FILE)).ok()
 }
 

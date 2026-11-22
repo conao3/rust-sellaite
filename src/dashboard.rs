@@ -256,15 +256,32 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
             INDEX.as_bytes(),
         ),
         ("GET", ["api", "desktops"]) => respond_json(&mut stream, "200 OK", &desktops()),
-        ("POST", ["api", "desktops", id, action @ ("pause" | "resume")]) => {
+        (
+            "POST",
+            [
+                "api",
+                "desktops",
+                id,
+                action @ ("pause" | "resume" | "take-over" | "give-back"),
+            ],
+        ) => {
             let Some(dir) = runtime::live_dir(id) else {
                 respond_error(&mut stream, "404 Not Found", "no such desktop");
                 return Ok(());
             };
-            let done = if *action == "pause" {
-                runtime::pause(&dir, STOP_REASON)
-            } else {
-                runtime::resume(&dir)
+            let done = match *action {
+                "take-over" => runtime::take_over(&dir),
+                "give-back" if runtime::taking_over(&dir) => runtime::give_back(&dir),
+                "resume" if !runtime::taking_over(&dir) => runtime::resume(&dir),
+                "pause" => runtime::pause(&dir, STOP_REASON),
+                _ => {
+                    respond_error(
+                        &mut stream,
+                        "409 Conflict",
+                        "desktop takeover state changed",
+                    );
+                    return Ok(());
+                }
             };
             match done {
                 Ok(()) => respond_json(&mut stream, "200 OK", &desktop_json(id, &dir)),
@@ -319,6 +336,7 @@ pub fn desktop_json(id: &str, dir: &Path) -> Value {
         "Height": state.as_ref().map(|s| s.height),
         "Pid": state.as_ref().map(|s| s.pid),
         "Paused": paused.is_some(),
+        "TakingOver": runtime::taking_over(dir),
         "PausedReason": paused,
         "UserSeatIdle": runtime::user_idle(dir),
         "PendingNotes": runtime::pending_notes(dir),

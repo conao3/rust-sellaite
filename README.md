@@ -29,6 +29,7 @@ Tools:
 | `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with two seats, `agent` for the agent and `seat0` for you, and a VNC server (wayvnc) on `seat0`. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
 | `stop_desktop` | | Stops sway, every process `launch` started (and the processes they started), and every application in the desktop. |
 | `launch` | `argv`, `wait_for_window` (default false), `timeout_ms` (default 10000, at most 60000) | Starts a program in the desktop, detached, with the desktop's `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`, and returns its `Pid`. With `wait_for_window`, returns once a window of the program or of a process it started has mapped, with `Window` (`Id`, `AppId`, `Pid`, `Name`), or an error when the program exits first or the timeout passes. |
+| `wait_for_stable_screen` | `quiet_ms` (default 500), `timeout_ms` (default 10000) | Samples the desktop until its screenshots agree for the quiet period, then reports elapsed time. Use after a window maps. This measures visual stability and can time out on animating screens. |
 | `wait` | `milliseconds` (at most 30000) | Sleeps. |
 | `screenshot` | | Returns the whole desktop as a PNG image. |
 | `click` | `x`, `y`, `button` (`left`, `right`, `middle`) | Moves the agent's pointer and clicks. |
@@ -38,6 +39,8 @@ Tools:
 The agent's clicks and keystrokes come from a virtual pointer and a virtual keyboard created on the `agent` seat, so they move only that seat's cursor and focus. Your seat keeps its own focus.
 
 While the agent is paused, `launch`, `click`, `type` and `key` return an error that says the user paused it; `screenshot`, `wait` and `stop_desktop` still work.
+
+Use **Take over** to pause the agent and enable input on the dashboard. **Give back** turns off dashboard input, resumes the agent, and queues a reminder to take a screenshot before acting.
 
 A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes one text item per note, oldest first, starting with `[sellaite] Note from the user`. A result that carries notes has no `structuredContent` (Claude Code shows only `structuredContent` when it is present). The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
 

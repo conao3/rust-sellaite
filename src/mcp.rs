@@ -1,5 +1,5 @@
 use std::io::{BufRead, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde_json::{Value, json};
@@ -64,6 +64,18 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {"milliseconds": {"type": "integer", "minimum": 0, "maximum": MAX_WAIT_MS}},
                 "required": ["milliseconds"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "wait_for_stable_screen",
+            "description": "Wait until sampled desktop screenshots match for quiet_ms. Use after a window maps or an action starts drawing. Increase quiet_ms for slow startup; this does not detect a shell prompt specifically.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "quiet_ms": {"type": "integer", "minimum": 100, "maximum": MAX_WAIT_MS, "default": 500},
+                    "timeout_ms": {"type": "integer", "minimum": 100, "maximum": MAX_WAIT_MS, "default": 10000}
+                },
                 "additionalProperties": false
             }
         },
@@ -268,6 +280,40 @@ impl Server {
                 std::thread::sleep(Duration::from_millis(ms));
                 Ok(text_result(format!("waited {ms} ms")))
             }
+            "wait_for_stable_screen" => {
+                let quiet = bounded(args, "quiet_ms", Some(500), MAX_WAIT_MS)?;
+                let timeout = bounded(args, "timeout_ms", Some(10_000), MAX_WAIT_MS)?;
+                if quiet < 100 || timeout <= quiet {
+                    return Err(
+                        "quiet_ms must be at least 100 and timeout_ms must exceed quiet_ms".into(),
+                    );
+                }
+                let desktop = self.desktop()?;
+                let start = Instant::now();
+                let deadline = start + Duration::from_millis(timeout);
+                let mut previous = desktop.screenshot()?;
+                let mut unchanged_since = Instant::now();
+                loop {
+                    std::thread::sleep(
+                        Duration::from_millis(100)
+                            .min(deadline.saturating_duration_since(Instant::now())),
+                    );
+                    let current = desktop.screenshot()?;
+                    let now = Instant::now();
+                    if now > deadline {
+                        return Err(format!("screen did not settle within {timeout} ms"));
+                    }
+                    if current != previous {
+                        previous = current;
+                        unchanged_since = now;
+                    } else if now.duration_since(unchanged_since) >= Duration::from_millis(quiet) {
+                        return Ok(text_result(format!(
+                            "screen settled in {} ms",
+                            start.elapsed().as_millis()
+                        )));
+                    }
+                }
+            }
             "screenshot" => {
                 let png = self.desktop()?.screenshot()?;
                 let data = base64::engine::general_purpose::STANDARD.encode(png);
@@ -390,6 +436,7 @@ mod tests {
                 "stop_desktop",
                 "launch",
                 "wait",
+                "wait_for_stable_screen",
                 "screenshot",
                 "click",
                 "type",

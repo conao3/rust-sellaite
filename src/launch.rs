@@ -103,6 +103,51 @@ impl WindowEvents {
     }
 }
 
+pub fn user_focus(swaysock: &Path) -> Result<Option<u64>, String> {
+    let seats = swaymsg(swaysock, &["-t", "get_seats"])?;
+    Ok(seats
+        .as_array()
+        .and_then(|seats| {
+            seats
+                .iter()
+                .find(|seat| seat["name"] == crate::desktop::USER_SEAT)
+        })
+        .and_then(|seat| seat["focus"].as_u64())
+        .filter(|&id| id != 0))
+}
+
+pub fn restore_user_focus(
+    swaysock: &Path,
+    previous: Option<u64>,
+    window: &Value,
+) -> Result<(), String> {
+    if let Some(previous) = previous
+        && user_focus(swaysock)? == window["id"].as_u64()
+        && Some(previous) != window["id"].as_u64()
+        && let Err(error) = swaymsg(swaysock, &[&format!("[con_id={previous}] focus")])
+        && !error.contains("No matching node.")
+    {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn swaymsg(swaysock: &Path, args: &[&str]) -> Result<Value, String> {
+    let output = std::process::Command::new("swaymsg")
+        .args(["-r", "-s"])
+        .arg(swaysock)
+        .args(args)
+        .output()
+        .map_err(|e| format!("cannot run swaymsg: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "swaymsg {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stdout)
+        ));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("swaymsg: {e}"))
+}
+
 fn stat(pid: u32) -> Option<(char, u32)> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let mut fields = stat.get(stat.rfind(')')? + 2..)?.split(' ');
