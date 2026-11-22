@@ -39,6 +39,13 @@ user's cursor or focus. See `README.md` for the goal.
   `paused` (holding the reason) into the desktop's runtime directory, and the
   MCP input tools refuse while it exists. It stays in Rust while it has no
   transitions beyond set and clear.
+- Notes are a file queue in the same way: `runtime::add_note` writes each note
+  to `notes/.<name>.tmp` and renames it to `notes/<name>` (the name starts
+  with the time in nanoseconds), and `runtime::take_notes` reads the names in
+  order, skips dot files, and returns a note only after removing its file. The
+  MCP server is the only reader of its desktop's queue; `Server::call_tool`
+  takes the notes after every tool call (and before `stop_desktop`, which
+  removes the directory) and appends them to the result's `content`.
 - Every generated function that Rust calls lands in the same change with a
   theorem about a property its callers rely on, and with a `#assay` line in
   `audit/`. `make check` runs `lake -d lean build --wfail`,
@@ -105,8 +112,8 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
 
 - Each desktop is a runtime directory `/tmp/sel.<Id>` (`src/runtime.rs`)
   holding sway's sockets, `sellaite.json` (the MCP server's `Pid`, the size and
-  `WaylandDisplay`), wayvnc's `vnc.sock`, and the files `paused` and
-  `user-idle`. `sellaite dashboard serve` finds desktops by scanning these
+  `WaylandDisplay`), wayvnc's `vnc.sock`, the files `paused` and
+  `user-idle`, and the `notes` directory. `sellaite dashboard serve` finds desktops by scanning these
   directories, so one dashboard serves every MCP server of the user.
 - `src/idle.rs` binds `ext_idle_notifier_v1` (version 2 uses
   `get_input_idle_notification`) on `seat0` with a 500 ms timeout: `idled`
@@ -117,7 +124,8 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   is older than 60 s and has no Wayland socket that accepts a connection.
 - `src/dashboard.rs` is a std-only HTTP server: `GET /`
   (`src/dashboard.html`), `GET /api/desktops`, `POST
-  /api/desktops/<Id>/{pause,resume}`, the WebSocket `GET
+  /api/desktops/<Id>/{pause,resume}`, `POST /api/desktops/<Id>/notes`
+  (JSON `{"Text": ...}`, at most 16 KiB), the WebSocket `GET
   /api/desktops/<Id>/vnc`, and noVNC under `/novnc/`. `Config::authorize`
   checks every request: `Host` against the loopback names, the listening
   address and the hosts of `--public-origins`; with `--allowed-logins`, the
@@ -130,7 +138,8 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
 - The CLI follows the AWS CLI grammar: `sellaite <command> <subcommand>
   --kebab-case-parameter value`, no positional arguments, JSON output by
   default with PascalCase keys. Exit codes: 0 on success, 252 for a usage
-  error, 255 for any other failure.
+  error, 254 when the target is missing (no running desktop with the given
+  Id), 255 for any other failure.
 - Commit messages, comments, test names and documentation are in English.
 - `.github/workflows/actions.lock` pins every action. Regenerate it with
   `gh actions-lock --no-interactive` in the same commit as any `uses:` change,
@@ -165,6 +174,14 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   `seat0`, when the watcher is bound to `agent`, and when the pause check is
   removed. `nix build` runs it too, so `nativeCheckInputs` carries `wayvnc`
   and the build sets `SELLAITE_NOVNC_DIR`.
+- `tests/dashboard.rs` also checks notes: with two desktops running, notes
+  sent through `sellaite desktop create-note` (text and `file://`) and the
+  dashboard arrive in order with the next tool call of their desktop only, a
+  second call gets none, a refused (paused) `click`, a `screenshot` and
+  `stop_desktop` carry the notes sent before them, and a foreign `Origin`,
+  an empty note and an unknown Id are refused (403, 400 and 252, 254). It
+  fails when a taken note is not removed, when error results get no notes, and
+  when `stop_desktop` does not take the notes before the desktop stops.
 - `tests/dashboard_access.rs` needs no desktop: it checks that with
   `--public-origins` and `--allowed-logins` a request without an allowed
   `Tailscale-User-Login`, from a foreign `Host` or with a foreign `Origin` gets

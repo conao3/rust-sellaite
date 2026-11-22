@@ -120,6 +120,23 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .screen > div { width: 100%; height: 100%; }
 .note { color: var(--muted); margin: 8px 0 0; }
+.compose { display: grid; gap: 6px; margin: 0 0 12px; }
+.compose label { font-weight: 600; }
+.compose textarea {
+  font: inherit;
+  width: 100%;
+  min-height: 3.2em;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  resize: vertical;
+}
+.compose textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.compose .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.compose .row .hint { flex: 1 1 240px; color: var(--muted); }
+button.send { background: var(--accent); color: var(--accent-text); }
 .error { color: var(--danger); }
 .empty {
   padding: 24px;
@@ -133,7 +150,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 <body>
 <header>
   <h1>sellaite</h1>
-  <p>Watch each agent's desktop and pause the agent when needed.</p>
+  <p>Watch each agent's desktop, send its agent a note, and pause the agent when needed.</p>
 </header>
 <div class="layout">
   <nav aria-label="Desktops">
@@ -149,6 +166,15 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
         <button class="stop" id="stop" type="button">Stop the agent</button>
         <button class="resume" id="resume" type="button">Resume</button>
       </div>
+      <form class="compose" id="compose">
+        <label for="note-text">Note to the agent</label>
+        <textarea id="note-text" maxlength="2000" rows="2" placeholder="For example: use the staging account, not production."></textarea>
+        <div class="row">
+          <span class="hint" id="note-status" role="status"></span>
+          <button class="send" id="send" type="submit">Send note</button>
+        </div>
+        <p class="note error" id="note-error" hidden></p>
+      </form>
       <div class="screen"><div id="screen"></div></div>
       <p class="note" id="connection">Not connected.</p>
       <p class="note error" id="action-error" hidden></p>
@@ -165,6 +191,9 @@ let loaded = false;
 let rfb = null;
 let connectedId = null;
 let busy = false;
+let sending = false;
+let shownDraft = null;
+const drafts = new Map();
 
 function selectedId() {
   const id = new URLSearchParams(location.search).get("desktop");
@@ -251,7 +280,52 @@ function render() {
   $("stop").title = desktop.Paused ? "The agent is already paused." : "Pause the agent: its input tools return an error until you resume it.";
   $("resume").disabled = busy || !desktop.Paused;
   $("resume").title = desktop.Paused ? "Let the agent use its input tools again." : "The agent is not paused.";
+  renderCompose(desktop);
   connect(desktop.Id);
+}
+
+function renderCompose(desktop) {
+  const text = $("note-text");
+  if (shownDraft !== desktop.Id) {
+    if (shownDraft !== null) drafts.set(shownDraft, text.value);
+    text.value = drafts.get(desktop.Id) || "";
+    shownDraft = desktop.Id;
+    $("note-error").hidden = true;
+  }
+  const empty = text.value.trim() === "";
+  $("send").disabled = sending || empty;
+  $("send").title = empty ? "Write a note first." : "The agent reads it in the result of its next tool call.";
+  const pending = desktop.PendingNotes;
+  $("note-status").textContent = pending > 0
+    ? `${pending} ${pending === 1 ? "note waits" : "notes wait"} for the agent's next tool call.`
+    : "The agent reads a note once, in the result of its next tool call. Ctrl+Enter sends.";
+}
+
+async function sendNote() {
+  const id = selectedId();
+  const text = $("note-text");
+  if (sending || text.value.trim() === "") return;
+  sending = true;
+  render();
+  $("note-error").hidden = true;
+  try {
+    const response = await fetch(`/api/desktops/${id}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ Text: text.value }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.Error || `HTTP ${response.status}`);
+    desktops = desktops.map((d) => (d.Id === id ? body : d));
+    if (shownDraft === id) text.value = "";
+    drafts.delete(id);
+  } catch (e) {
+    $("note-error").textContent = `Could not send the note: ${e.message}`;
+    $("note-error").hidden = false;
+  } finally {
+    sending = false;
+    render();
+  }
 }
 
 async function refresh() {
@@ -285,6 +359,11 @@ async function act(action) {
   }
 }
 
+$("compose").addEventListener("submit", (e) => { e.preventDefault(); sendNote(); });
+$("note-text").addEventListener("input", render);
+$("note-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendNote(); }
+});
 $("stop").addEventListener("click", () => act("pause"));
 $("resume").addEventListener("click", () => act("resume"));
 window.addEventListener("popstate", render);

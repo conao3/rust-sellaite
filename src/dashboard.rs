@@ -19,6 +19,8 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 const MAX_FRAME_BYTES: u64 = 1 << 20;
 
+const MAX_BODY_BYTES: usize = 16 * 1024;
+
 struct Request {
     method: String,
     path: String,
@@ -186,6 +188,21 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
     })
 }
 
+fn read_body(reader: &mut BufReader<TcpStream>, request: &Request) -> Result<Vec<u8>, String> {
+    let length: usize = request
+        .header("Content-Length")
+        .and_then(|v| v.parse().ok())
+        .ok_or("the request has no Content-Length")?;
+    if length > MAX_BODY_BYTES {
+        return Err(format!("the body is larger than {MAX_BODY_BYTES} bytes"));
+    }
+    let mut body = vec![0u8; length];
+    reader
+        .read_exact(&mut body)
+        .map_err(|e| format!("cannot read the body: {e}"))?;
+    Ok(body)
+}
+
 fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) {
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
@@ -240,7 +257,7 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
         ),
         ("GET", ["api", "desktops"]) => respond_json(&mut stream, "200 OK", &desktops()),
         ("POST", ["api", "desktops", id, action @ ("pause" | "resume")]) => {
-            let Some(dir) = live_dir(id) else {
+            let Some(dir) = runtime::live_dir(id) else {
                 respond_error(&mut stream, "404 Not Found", "no such desktop");
                 return Ok(());
             };
@@ -254,8 +271,34 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
                 Err(e) => respond_error(&mut stream, "500 Internal Server Error", &e),
             }
         }
+        ("POST", ["api", "desktops", id, "notes"]) => {
+            let Some(dir) = runtime::live_dir(id) else {
+                respond_error(&mut stream, "404 Not Found", "no such desktop");
+                return Ok(());
+            };
+            let text = match read_body(&mut reader, &request).and_then(|body| {
+                serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|v| v.get("Text")?.as_str().map(str::to_string))
+                    .ok_or_else(|| "expected a JSON body {\"Text\": \"...\"}".to_string())
+            }) {
+                Ok(text) => text,
+                Err(e) => {
+                    respond_error(&mut stream, "400 Bad Request", &e);
+                    return Ok(());
+                }
+            };
+            if let Err(e) = runtime::check_note(&text) {
+                respond_error(&mut stream, "400 Bad Request", &e);
+                return Ok(());
+            }
+            match runtime::add_note(&dir, &text) {
+                Ok(_) => respond_json(&mut stream, "200 OK", &desktop_json(id, &dir)),
+                Err(e) => respond_error(&mut stream, "500 Internal Server Error", &e),
+            }
+        }
         ("GET", ["api", "desktops", id, "vnc"]) => {
-            let Some(dir) = live_dir(id) else {
+            let Some(dir) = runtime::live_dir(id) else {
                 respond_error(&mut stream, "404 Not Found", "no such desktop");
                 return Ok(());
             };
@@ -267,14 +310,7 @@ fn handle(stream: TcpStream, config: &Config) -> std::io::Result<()> {
     Ok(())
 }
 
-fn live_dir(id: &str) -> Option<PathBuf> {
-    runtime::live_desktops()
-        .into_iter()
-        .find(|(i, _, _)| i == id)
-        .map(|(_, dir, _)| dir)
-}
-
-fn desktop_json(id: &str, dir: &Path) -> Value {
+pub fn desktop_json(id: &str, dir: &Path) -> Value {
     let state = runtime::read_state(dir);
     let paused = runtime::paused(dir);
     json!({
@@ -285,10 +321,11 @@ fn desktop_json(id: &str, dir: &Path) -> Value {
         "Paused": paused.is_some(),
         "PausedReason": paused,
         "UserSeatIdle": runtime::user_idle(dir),
+        "PendingNotes": runtime::pending_notes(dir),
     })
 }
 
-fn desktops() -> Value {
+pub fn desktops() -> Value {
     let list: Vec<Value> = runtime::live_desktops()
         .iter()
         .map(|(id, dir, _)| desktop_json(id, dir))

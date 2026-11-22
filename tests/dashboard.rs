@@ -69,6 +69,16 @@ impl Dashboard {
         .0
     }
 
+    fn post_json(&self, path: &str, origin: &str, body: &Value) -> (u16, Value) {
+        let body = body.to_string();
+        let (status, response) = self.send(&format!(
+            "POST {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            self.host,
+            body.len()
+        ));
+        (status, serde_json::from_slice(&response).unwrap())
+    }
+
     fn origin(&self) -> String {
         format!("http://{}", self.host)
     }
@@ -312,4 +322,112 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         dashboard.desktop(&id).is_none(),
         "a stopped desktop is listed"
     );
+}
+
+const NOTE_MARKER: &str = "[sellaite] Note from the user";
+
+fn notes_in(result: &Value) -> Vec<String> {
+    result["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .filter(|text| text.starts_with(NOTE_MARKER))
+        .map(|text| text.split_once('\n').unwrap().1.to_string())
+        .collect()
+}
+
+fn create_note(id: &str, text: &str) -> (i32, Value) {
+    let output = Command::new(env!("CARGO_BIN_EXE_sellaite"))
+        .args(["desktop", "create-note", "--desktop-id", id, "--text", text])
+        .output()
+        .unwrap();
+    let json = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+    (output.status.code().unwrap(), json)
+}
+
+#[test]
+fn a_note_reaches_the_next_tool_call_of_its_desktop_once() {
+    let mut first = Mcp::spawn();
+    let mut second = Mcp::spawn();
+    let start = |mcp: &mut Mcp| {
+        mcp.call("start_desktop", json!({"width": 640, "height": 480}))["structuredContent"]["Id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (id, other) = (start(&mut first), start(&mut second));
+    let initialize = first.request("initialize", json!({"protocolVersion": "2025-11-25"}));
+    assert!(
+        initialize["instructions"]
+            .as_str()
+            .unwrap()
+            .contains(NOTE_MARKER)
+    );
+    let dashboard = Dashboard::spawn();
+
+    let (code, desktop) = create_note(&id, "from the CLI");
+    assert_eq!(code, 0);
+    assert_eq!(desktop["PendingNotes"], 1, "{desktop}");
+    let file = std::env::temp_dir().join(format!("sellaite-note-{}", std::process::id()));
+    std::fs::write(&file, "from a file\n").unwrap();
+    assert_eq!(create_note(&id, &format!("file://{}", file.display())).0, 0);
+    std::fs::remove_file(&file).unwrap();
+    let notes = format!("/api/desktops/{id}/notes");
+    let (status, desktop) = dashboard.post_json(
+        &notes,
+        &dashboard.origin(),
+        &json!({"Text": "from the dashboard"}),
+    );
+    assert_eq!(status, 200, "{desktop}");
+    assert_eq!(desktop["PendingNotes"], 3, "{desktop}");
+    let (status, _) =
+        dashboard.post_json(&notes, "http://evil.example", &json!({"Text": "forged"}));
+    assert_eq!(status, 403, "a note from a foreign Origin was accepted");
+    let (status, _) = dashboard.post_json(&notes, &dashboard.origin(), &json!({"Text": "  "}));
+    assert_eq!(status, 400, "an empty note was accepted");
+    assert_eq!(create_note(&id, "").0, 252);
+    assert_eq!(create_note("Zz9999", "to nobody").0, 254);
+    assert_eq!(dashboard.desktop(&id).unwrap()["PendingNotes"], 3);
+    assert_eq!(dashboard.desktop(&other).unwrap()["PendingNotes"], 0);
+
+    let elsewhere = second.call("wait", json!({"milliseconds": 0}));
+    assert!(
+        notes_in(&elsewhere).is_empty(),
+        "another desktop's agent got the note: {elsewhere}"
+    );
+    let result = first.call("wait", json!({"milliseconds": 0}));
+    assert_eq!(result["content"][0]["text"], "waited 0 ms");
+    assert_eq!(
+        notes_in(&result),
+        ["from the CLI", "from a file", "from the dashboard"],
+        "{result}"
+    );
+    assert_eq!(dashboard.desktop(&id).unwrap()["PendingNotes"], 0);
+    let again = first.call("wait", json!({"milliseconds": 0}));
+    assert!(notes_in(&again).is_empty(), "a note arrived twice: {again}");
+
+    let pause = format!("/api/desktops/{id}/pause");
+    assert_eq!(dashboard.post(&pause, &dashboard.origin()), 200);
+    assert_eq!(create_note(&id, "while paused").0, 0);
+    let refused = first.request(
+        "tools/call",
+        json!({"name": "click", "arguments": {"x": 1, "y": 1}}),
+    );
+    assert!(is_error(&refused), "{refused}");
+    assert_eq!(notes_in(&refused), ["while paused"], "{refused}");
+    assert_eq!(
+        dashboard.post(&format!("/api/desktops/{id}/resume"), &dashboard.origin()),
+        200
+    );
+
+    assert_eq!(create_note(&id, "before a screenshot").0, 0);
+    let shot = first.call("screenshot", json!({}));
+    assert_eq!(shot["content"][0]["type"], "image");
+    assert_eq!(notes_in(&shot), ["before a screenshot"]);
+
+    assert_eq!(create_note(&id, "at the end").0, 0);
+    let stopped = first.call("stop_desktop", json!({}));
+    assert_eq!(notes_in(&stopped), ["at the end"], "{stopped}");
+    second.call("stop_desktop", json!({}));
 }

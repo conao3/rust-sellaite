@@ -4,6 +4,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,10 @@ const STATE_FILE: &str = "sellaite.json";
 const PAUSED_FILE: &str = "paused";
 
 const USER_IDLE_FILE: &str = "user-idle";
+
+const NOTES_DIR: &str = "notes";
+
+pub const MAX_NOTE_CHARS: usize = 2000;
 
 pub const VNC_SOCKET: &str = "vnc.sock";
 
@@ -99,6 +104,80 @@ pub fn set_user_idle(dir: &Path, idle: bool) {
 
 pub fn user_idle(dir: &Path) -> bool {
     dir.join(USER_IDLE_FILE).exists()
+}
+
+pub fn check_note(text: &str) -> Result<&str, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("the note is empty".into());
+    }
+    let chars = text.chars().count();
+    if chars > MAX_NOTE_CHARS {
+        return Err(format!(
+            "the note has {chars} characters; at most {MAX_NOTE_CHARS} are allowed"
+        ));
+    }
+    Ok(text)
+}
+
+fn note_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir.join(NOTES_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+pub fn add_note(dir: &Path, text: &str) -> Result<usize, String> {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let text = check_note(text)?;
+    let notes = dir.join(NOTES_DIR);
+    match fs::create_dir(&notes) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+            return Err(format!("cannot create {}: {e}", notes.display()));
+        }
+        _ => {}
+    }
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let name = format!(
+        "{nanos:020}-{:010}-{:010}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let tmp = notes.join(format!(".{name}.tmp"));
+    fs::write(&tmp, text).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, notes.join(&name)).map_err(|e| format!("cannot add the note: {e}"))?;
+    Ok(pending_notes(dir))
+}
+
+pub fn pending_notes(dir: &Path) -> usize {
+    note_names(dir).len()
+}
+
+pub fn take_notes(dir: &Path) -> Vec<String> {
+    let notes = dir.join(NOTES_DIR);
+    note_names(dir)
+        .into_iter()
+        .filter_map(|name| {
+            let path = notes.join(&name);
+            let text = fs::read_to_string(&path).ok()?;
+            fs::remove_file(&path).ok()?;
+            Some(text)
+        })
+        .collect()
+}
+
+pub fn live_dir(id: &str) -> Option<PathBuf> {
+    live_desktops()
+        .into_iter()
+        .find(|(i, _, _)| i == id)
+        .map(|(_, dir, _)| dir)
 }
 
 fn process_alive(pid: u32) -> bool {
@@ -196,6 +275,23 @@ mod tests {
         resume(&dir).unwrap();
         resume(&dir).unwrap();
         assert_eq!(paused(&dir), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn notes_are_taken_once_in_order() {
+        let dir = make_dir().unwrap();
+        assert_eq!(take_notes(&dir), Vec::<String>::new());
+        assert_eq!(add_note(&dir, "  first\n").unwrap(), 1);
+        assert_eq!(add_note(&dir, "second").unwrap(), 2);
+        fs::write(dir.join(NOTES_DIR).join(".half-written.tmp"), "partial").unwrap();
+        assert_eq!(pending_notes(&dir), 2);
+        assert_eq!(take_notes(&dir), ["first", "second"]);
+        assert_eq!(take_notes(&dir), Vec::<String>::new());
+        assert_eq!(pending_notes(&dir), 0);
+        assert!(add_note(&dir, " \n ").is_err());
+        assert!(add_note(&dir, &"x".repeat(MAX_NOTE_CHARS + 1)).is_err());
+        assert!(add_note(&dir, &"\u{3042}".repeat(MAX_NOTE_CHARS)).is_ok());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

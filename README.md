@@ -10,7 +10,7 @@ The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
 ## Status
 
-Early development. The MCP server runs one desktop with an agent seat and a user seat, and the dashboard shows each desktop in the browser and pauses its agent. Sending the agent a note, approving its actions and taking over the desktop are not built yet.
+Early development. The MCP server runs one desktop with an agent seat and a user seat, and the dashboard shows each desktop in the browser, sends its agent notes and pauses it. Approving the agent's actions and taking over the desktop are not built yet.
 
 ## Usage
 
@@ -39,6 +39,8 @@ The agent's clicks and keystrokes come from a virtual pointer and a virtual keyb
 
 While the agent is paused, `launch`, `click`, `type` and `key` return an error that says the user paused it; `screenshot`, `wait` and `stop_desktop` still work.
 
+A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes one text item per note, oldest first, starting with `[sellaite] Note from the user`. The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
+
 A window that maps gets the keyboard focus of both seats, so after `launch` with `wait_for_window` the agent can `type` into it without a click; text typed before the window maps is lost. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and marks it and everything it starts with `SELLAITE_DESKTOP=<Id>` in the environment; `stop_desktop` stops every process that carries the mark.
 
 ## Dashboard
@@ -50,9 +52,20 @@ nix run github:conao3/rust-sellaite -- dashboard serve
 The dashboard listens on `http://127.0.0.1:8730/` (`--address` changes it) and prints its URL as `{"Url": ...}`. It lists the desktops that running `sellaite mcp serve` processes of the same user have started and shows the selected one (`?desktop=<Id>`) through noVNC in view-only mode, so watching the page sends no input to the desktop.
 
 - **Stop the agent** pauses the agent: its `click`, `type` and `key` return an error until you press **Resume**.
+- **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
 - Any input on your seat (`seat0`), for example from a VNC client connected to the desktop's `VncSocket`, also pauses the agent. sellaite watches `seat0` with ext-idle-notify-v1 (500 ms timeout); the agent's own input is on the `agent` seat and does not pause it.
 
-The dashboard serves noVNC from `--novnc-dir` (or `SELLAITE_NOVNC_DIR`; the Nix package sets it) and proxies the browser's WebSocket to the desktop's wayvnc unix socket. It answers only requests whose `Host` is `localhost`, `127.0.0.1`, `[::1]` or the address it listens on, and it accepts Stop, Resume and the VNC WebSocket only from its own page (`Origin`).
+The dashboard serves noVNC from `--novnc-dir` (or `SELLAITE_NOVNC_DIR`; the Nix package sets it) and proxies the browser's WebSocket to the desktop's wayvnc unix socket. It answers only requests whose `Host` is `localhost`, `127.0.0.1`, `[::1]` or the address it listens on, and it accepts Stop, Resume, notes and the VNC WebSocket only from its own page (`Origin`).
+
+### Notes from the command line
+
+```sh
+sellaite desktop list-desktops
+sellaite desktop create-note --desktop-id AZeZKq --text "Use the staging account, not production."
+sellaite desktop create-note --desktop-id AZeZKq --text file:///dev/stdin < note.txt
+```
+
+`create-note` prints the desktop as JSON with its `PendingNotes`. It exits 252 for an empty note, one over 2000 characters or a malformed `--desktop-id`, and 254 when no desktop with that Id is running.
 
 ### Watching from another machine on the tailnet
 

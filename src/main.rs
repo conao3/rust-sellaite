@@ -29,6 +29,48 @@ enum Command {
         #[command(subcommand)]
         command: DashboardCommand,
     },
+    /// The running desktops of this user
+    Desktop {
+        #[command(subcommand)]
+        command: DesktopCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum DesktopCommand {
+    /// List the running desktops
+    ListDesktops,
+    /// Send a note to the agent of a desktop; it arrives once, appended to the
+    /// result of the agent's next MCP tool call
+    CreateNote {
+        /// The desktop's Id (as list-desktops and the dashboard show it)
+        #[arg(long, value_parser = desktop_id)]
+        desktop_id: String,
+        /// The note's text, or file://<path> to read it from a file
+        /// (file:///dev/stdin reads standard input)
+        #[arg(long, value_parser = note_text)]
+        text: String,
+    },
+}
+
+fn desktop_id(value: &str) -> Result<String, String> {
+    if runtime::is_id(value) {
+        Ok(value.to_string())
+    } else {
+        Err(format!(
+            "{value:?} is not a desktop Id (6 letters or digits)"
+        ))
+    }
+}
+
+fn note_text(value: &str) -> Result<String, String> {
+    let text = match value.strip_prefix("file://") {
+        Some(path) => {
+            std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?
+        }
+        None => value.to_string(),
+    };
+    runtime::check_note(&text).map(str::to_string)
 }
 
 #[derive(Subcommand)]
@@ -60,6 +102,7 @@ enum McpCommand {
 }
 
 const EXIT_USAGE: i32 = 252;
+const EXIT_TARGET: i32 = 254;
 const EXIT_FAILURE: i32 = 255;
 
 fn main() {
@@ -97,6 +140,24 @@ fn main() {
             if let Err(e) = dashboard::serve(address, &novnc_dir, &public_origins, allowed_logins) {
                 eprintln!("sellaite: {e}");
                 std::process::exit(EXIT_FAILURE);
+            }
+        }
+        Command::Desktop {
+            command: DesktopCommand::ListDesktops,
+        } => println!("{}", dashboard::desktops()),
+        Command::Desktop {
+            command: DesktopCommand::CreateNote { desktop_id, text },
+        } => {
+            let Some(dir) = runtime::live_dir(&desktop_id) else {
+                eprintln!("sellaite: no desktop {desktop_id} is running");
+                std::process::exit(EXIT_TARGET);
+            };
+            match runtime::add_note(&dir, &text) {
+                Ok(_) => println!("{}", dashboard::desktop_json(&desktop_id, &dir)),
+                Err(e) => {
+                    eprintln!("sellaite: {e}");
+                    std::process::exit(EXIT_FAILURE);
+                }
             }
         }
     }

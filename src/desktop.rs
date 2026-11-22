@@ -256,6 +256,10 @@ impl Desktop {
         runtime::paused(&self.runtime_dir)
     }
 
+    pub fn take_notes(&self) -> Vec<String> {
+        runtime::take_notes(&self.runtime_dir)
+    }
+
     pub fn click(&mut self, x: u32, y: u32, button: Button) -> Result<(), String> {
         self.input.click(x, y, button)
     }

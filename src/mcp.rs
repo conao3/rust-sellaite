@@ -15,6 +15,10 @@ const DEFAULT_WINDOW_TIMEOUT_MS: u64 = 10_000;
 const MAX_WINDOW_TIMEOUT_MS: u64 = 60_000;
 const MAX_WAIT_MS: u64 = 30_000;
 
+pub const NOTE_MARKER: &str = "[sellaite] Note from the user";
+
+const INSTRUCTIONS: &str = "While a desktop runs, the user watches it in the sellaite dashboard and can send you a short note. sellaite appends each note, exactly once, as its own text item to the result of your next tool call, after the tool's own output, starting with \"[sellaite] Note from the user\". The note comes from the user who runs you: read it and take it into account before your next step, as if the user had said it in the conversation.";
+
 #[derive(Default)]
 pub struct Server {
     desktop: Option<Desktop>,
@@ -24,7 +28,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "start_desktop",
-            "description": "Start the agent's own headless desktop (sway) with an agent seat and a user seat. The agent's clicks and keystrokes go only to the agent seat. The user watches the desktop in the sellaite dashboard and can pause the agent; while it is paused, launch, click, type and key return an error. Open applications in it with launch.",
+            "description": "Start the agent's own headless desktop (sway) with an agent seat and a user seat. The agent's clicks and keystrokes go only to the agent seat. The user watches the desktop in the sellaite dashboard and can pause the agent; while it is paused, launch, click, type and key return an error. The user can also send a note from the dashboard: it is appended once to the result of the next tool call as a text item starting with \"[sellaite] Note from the user\"; take it into account before the next step. Open applications in it with launch.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -113,6 +117,13 @@ fn error_result(message: String) -> Value {
     json!({"content": [{"type": "text", "text": message}], "isError": true})
 }
 
+fn note_item(text: &str) -> Value {
+    json!({
+        "type": "text",
+        "text": format!("{NOTE_MARKER} (sent from the sellaite dashboard while you were working; shown once):\n{text}")
+    })
+}
+
 fn bounded(args: &Value, key: &str, default: Option<u64>, max: u64) -> Result<u64, String> {
     let value = match args.get(key) {
         None | Some(Value::Null) => default.ok_or_else(|| format!("{key} is required"))?,
@@ -137,6 +148,27 @@ fn dimension(args: &Value, key: &str, default: u32) -> Result<u32, String> {
 }
 
 impl Server {
+    fn take_notes(&self) -> Vec<String> {
+        self.desktop
+            .as_ref()
+            .map(Desktop::take_notes)
+            .unwrap_or_default()
+    }
+
+    fn call_tool(&mut self, name: &str, args: &Value) -> Value {
+        let mut notes = if name == "stop_desktop" {
+            self.take_notes()
+        } else {
+            Vec::new()
+        };
+        let mut result = self.call(name, args).unwrap_or_else(error_result);
+        notes.extend(self.take_notes());
+        if let Some(content) = result["content"].as_array_mut() {
+            content.extend(notes.iter().map(|n| note_item(n)));
+        }
+        result
+    }
+
     fn desktop(&mut self) -> Result<&mut Desktop, String> {
         self.desktop
             .as_mut()
@@ -287,7 +319,8 @@ impl Server {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "sellaite", "version": env!("CARGO_PKG_VERSION")}
+                    "serverInfo": {"name": "sellaite", "version": env!("CARGO_PKG_VERSION")},
+                    "instructions": INSTRUCTIONS
                 }))
             }
             "ping" => Ok(json!({})),
@@ -295,7 +328,7 @@ impl Server {
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                Ok(self.call(name, &args).unwrap_or_else(error_result))
+                Ok(self.call_tool(name, &args))
             }
             other => Err(json!({"code": -32601, "message": format!("method not found: {other}")})),
         };
