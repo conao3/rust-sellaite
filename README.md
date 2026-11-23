@@ -285,6 +285,10 @@ Closing the MCP connection normally stops the desktop. If the MCP server receive
 
 The client opens applications with `launch`, which can execute any program available to the MCP server's user. See [Security](#security) for isolation guidance. Run the client where `sellaite`, its runtime dependencies and the applications you want (for example `foot`) are on `PATH`.
 
+Each MCP server process runs one desktop at a time. Give each agent its own
+`sellaite mcp serve-mcp` process. One dashboard can show all the desktops
+started by those processes for the same user.
+
 For a headless Claude Code run, pass the server in a config file and allow only its tools:
 
 ```json
@@ -312,6 +316,27 @@ args = ["mcp", "serve-mcp"]
 ```
 
 The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05.
+
+### Troubleshooting
+
+- **Wayland fails to create a socket.** On Linux, a pathname Unix socket has
+  108 bytes for the path and its terminating NUL. sellaite places its desktop
+  sockets under `/tmp/sel.<Id>` to stay within that limit. If you start sway
+  yourself, use a short, private `XDG_RUNTIME_DIR`, for example one created
+  with `mktemp -d /tmp/wayland.XXXXXX`.
+- **Codex waits for tool approval.** In an interactive Codex session, use
+  `/mcp` to check that sellaite is active, then review and approve the tool
+  call when prompted. For an unattended run that needs pre-approval, set
+  `approval_mode = "approve"` under
+  `[mcp_servers.sellaite.tools.<tool_name>]` for each tool you intend to permit.
+  Codex tool approvals and sellaite's dashboard approvals are separate.
+  See the [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli#configtoml-examples).
+- **A note arrives after another action.** sellaite attaches notes to a
+  tool result. If the client submits several calls together, calls already
+  submitted can run before the model reads the note. Ask the agent to call
+  tools one at a time and read each result before acting. For an urgent
+  change, use **Stop the agent**, send the note, and have the agent read it
+  through a `wait` or `screenshot` result before you resume.
 
 ## Dashboard API
 
