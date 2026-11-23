@@ -79,7 +79,7 @@ On openSUSE Tumbleweed:
 
 ```sh
 sudo zypper install gcc rust cargo ca-certificates sway grim wayvnc coreutils \
-  python3 libatspi0 at-spi2-core dbus-1 novnc foot dejavu-fonts
+  python3 libatspi0 at-spi2-core dbus-1-daemon novnc foot dejavu-fonts
 ```
 
 On Arch Linux:
