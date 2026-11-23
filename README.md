@@ -57,6 +57,31 @@ sudo apt install build-essential cargo ca-certificates git sway grim wayvnc core
   python3 libatspi2.0-0t64 at-spi2-core dbus novnc foot fonts-dejavu-core
 ```
 
+On Debian 13, enable [`trixie-backports`](https://backports.debian.org/Instructions/)
+for Cargo and Rust.
+The stable Rust package is older than sellaite requires:
+
+```sh
+sudo apt update
+sudo apt install build-essential ca-certificates git sway grim wayvnc coreutils \
+  python3 libatspi2.0-0t64 at-spi2-core dbus novnc foot fonts-dejavu-core
+sudo apt install -t trixie-backports cargo rustc
+```
+
+On Fedora:
+
+```sh
+sudo dnf install gcc rust cargo ca-certificates sway grim wayvnc coreutils \
+  python3 at-spi2-core dbus-daemon novnc foot dejavu-sans-mono-fonts
+```
+
+On openSUSE Tumbleweed:
+
+```sh
+sudo zypper install gcc rust cargo ca-certificates sway grim wayvnc coreutils \
+  python3 libatspi0 at-spi2-core dbus-1 novnc foot dejavu-fonts
+```
+
 On Arch Linux:
 
 ```sh
@@ -101,8 +126,9 @@ To enable AT-SPI2 checks, set `SELLAITE_ATSPI_LIBRARY=libatspi.so.0` in the MCP
 server's environment and run it inside a D-Bus user session. You can also set
 an absolute library path. Approvals require an accessible target.
 
-The dashboard reads noVNC from `/usr/share/novnc` by default. The Ubuntu
-`novnc` package installs it there. On Arch, unpack an [upstream noVNC
+The dashboard reads noVNC from `/usr/share/novnc` by default. The Ubuntu,
+Debian, Fedora and Tumbleweed `novnc` packages install it there. On Arch,
+unpack an [upstream noVNC
 release](https://github.com/novnc/noVNC/releases) and pass the directory
 containing `core/rfb.js` with `--novnc-dir` or `SELLAITE_NOVNC_DIR`:
 
