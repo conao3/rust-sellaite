@@ -305,7 +305,12 @@ fn on_path(program: &str) -> bool {
 #[test]
 fn launch_opens_an_x11_window_through_the_desktops_xwayland() {
     if !on_path("Xwayland") {
-        eprintln!("skipped: Xwayland is not on PATH (add xwayland to the devShell)");
+        use std::io::Write;
+        writeln!(
+            std::io::stderr(),
+            "skipped: Xwayland is not on PATH (add xwayland to the devShell)"
+        )
+        .unwrap();
         return;
     }
     let mut mcp = Mcp::spawn_with_env([("DISPLAY", ":sellaite-user-display")]);
@@ -335,9 +340,17 @@ fn launch_opens_an_x11_window_through_the_desktops_xwayland() {
         .expect("xterm has no DISPLAY");
     let lock = std::fs::read_to_string(format!("/tmp/.X{}-lock", &display[1..])).unwrap();
     let owner = lock.trim_matches(|c: char| c.is_whitespace() || c == '\0');
+    let runtime_dir = format!(
+        "XDG_RUNTIME_DIR={}",
+        info["XdgRuntimeDir"].as_str().unwrap()
+    );
     let sway = std::fs::read_to_string(format!("/proc/{owner}/stat")).unwrap_or_default();
+    let sway_environment = std::fs::read(format!("/proc/{owner}/environ")).unwrap_or_default();
     assert!(
-        sway.contains("(sway)"),
+        sway.contains("(sway)")
+            && sway_environment
+                .split(|&byte| byte == 0)
+                .any(|entry| entry == runtime_dir.as_bytes()),
         "DISPLAY {display} does not belong to the desktop's sway: {sway}"
     );
 

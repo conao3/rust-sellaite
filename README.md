@@ -112,7 +112,7 @@ binary directory (usually `$HOME/.cargo/bin`) to your `PATH`.
 | `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Resolve AT-SPI2 targets for sensitive input and approvals. |
 | noVNC | Render the desktop in the dashboard. |
 | `foot`, a font and D-Bus | Provide a terminal for the quick start and a session bus for accessibility-enabled apps. |
-| Xwayland (`xwayland` on Ubuntu, Debian and openSUSE, `xorg-xwayland` on Arch, `xorg-x11-server-Xwayland` on Fedora) | Run X11-only applications such as `xterm` in the desktop. sway starts Xwayland when the first X11 client connects, and `launch` gives programs the desktop's own `DISPLAY`. Wayland applications do not need it. |
+| Xwayland (`xwayland` on Ubuntu, Debian and openSUSE, `xorg-xwayland` on Arch, `xorg-x11-server-Xwayland` on Fedora) | Run X11-only applications such as `xterm` in the desktop. sway starts Xwayland when the first X11 client connects, and `launch` gives programs the desktop's own `DISPLAY`. Wayland applications do not need it. X11 windows open and take the agent seat's focus, but text from `type` arrives in them decoded with a US layout instead of the keymap `type` uploads, so the characters are wrong. |
 
 The headless install check covers sway 1.11 and wayvnc 0.9.1 on Ubuntu
 26.04 LTS, and sway 1.12 and wayvnc 0.10.2 on Arch. Older versions and the
