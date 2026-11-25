@@ -24,8 +24,13 @@
         { pkgs, system, ... }:
         let
           leanfran = inputs.leanfran.packages.${system}.rust-compiler;
+          sway = pkgs.sway-unwrapped.override {
+            wlroots_0_20 = pkgs.wlroots_0_20.overrideAttrs (old: {
+              patches = (old.patches or [ ]) ++ [ ./nix/wlroots-xwayland-map-on-associate.patch ];
+            });
+          };
           desktopTools = [
-            pkgs.sway-unwrapped
+            sway
             pkgs.grim
             pkgs.python3
             pkgs.coreutils

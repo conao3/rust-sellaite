@@ -226,4 +226,10 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   that `--public-origins` without `--allowed-logins` is a usage error. It fails
   when the login check is removed.
 - The flake uses `sway-unwrapped`: the nixpkgs `sway` wrapper starts
-  `dbus-run-session`, which fails where no D-Bus daemon is installed.
+  `dbus-run-session`, which fails where no D-Bus daemon is installed. Its
+  wlroots carries `nix/wlroots-xwayland-map-on-associate.patch` (upstream
+  wlroots 08a9f9f1, not in 0.20.2), which maps an X11 surface whose first
+  buffer arrived before the X11 `WL_SURFACE_SERIAL` message. Without it the
+  xterm test of `tests/launch.rs` fails in about 4% of runs with
+  `mapped no window`, and the X window stays mapped on the X side with
+  `WM_STATE` Normal while sway has no view of it.
