@@ -325,16 +325,15 @@ The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2
   sockets under `/tmp/sel.<Id>` to stay within that limit. If you start sway
   yourself, use a short, private `XDG_RUNTIME_DIR`, for example one created
   with `mktemp -d /tmp/wayland.XXXXXX`.
-- **An X11 window never appears.** wlroots 0.20.2 and earlier, which sway
-  1.12 uses, can leave an X11 window unmapped when Xwayland commits the
-  window's first frame before wlroots pairs the window with its surface; the
-  window stays invisible to sway, and `launch` with `wait_for_window` returns
-  `mapped no window`; in the xterm test it happened in 20 of 450 launches. wlroots
-  fixed it upstream in
+- **An X11 window never appears.** wlroots 0.20.2, which sway 1.12 uses, can
+  leave an X11 window unmapped when Xwayland commits the window's first frame
+  before wlroots pairs the window with its surface. The window stays
+  invisible to sway, and `launch` with `wait_for_window` returns `mapped no
+  window`; in the xterm test it happened in 20 of 450 launches. wlroots fixed
+  it upstream in
   [08a9f9f1](https://gitlab.freedesktop.org/wlroots/wlroots/-/commit/08a9f9f14fc8fd173d1768588699d2e152b6cde6),
-  and the Nix package of sellaite runs a sway built with that patch. With a
-  distribution's sway, stop the program and launch it again, or use a wlroots
-  release that contains the fix.
+  which is not in a release yet. The Nix package of sellaite runs a sway built
+  with that patch.
 - **Codex waits for tool approval.** In an interactive Codex session, use
   `/mcp` to check that sellaite is active, then review and approve the tool
   call when prompted. For an unattended run that needs pre-approval, set

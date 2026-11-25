@@ -230,6 +230,6 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   wlroots carries `nix/wlroots-xwayland-map-on-associate.patch` (upstream
   wlroots 08a9f9f1, not in 0.20.2), which maps an X11 surface whose first
   buffer arrived before the X11 `WL_SURFACE_SERIAL` message. Without it the
-  xterm test of `tests/launch.rs` fails in about 4% of runs with
+  xterm test of `tests/launch.rs` failed in 20 of 450 runs with
   `mapped no window`, and the X window stays mapped on the X side with
   `WM_STATE` Normal while sway has no view of it.
