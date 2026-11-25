@@ -347,7 +347,7 @@ function renderApproval(desktop) {
   if (!request) return;
   const target = [request.Target.Application, request.Target.Window, request.Target.Role,
     request.Target.Name, request.Domain].filter(Boolean);
-  $("approval-label").textContent = [`${request.Tool}: ${request.Reason}`, ...target].join(" · ");
+  $("approval-label").textContent = [`${request.Tool}: ${request.Reason}`, ...target].join(", ");
   for (const button of ["approve", "edit-approval", "reject"]) $(button).disabled = busy;
   if (canvas) {
     const screen = $("screen").getBoundingClientRect();
