@@ -30,6 +30,7 @@
             pkgs.python3
             pkgs.coreutils
             pkgs.wayvnc
+            pkgs.xwayland
           ];
           atspiLibrary = "${pkgs.at-spi2-core}/lib/libatspi.so.0";
           novncDir = "${pkgs.novnc}/share/webapps/novnc";
@@ -53,7 +54,13 @@
               pkgs.gnumake
               leanfran
             ]
-            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (desktopTools ++ [ pkgs.foot ]);
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
+              desktopTools
+              ++ [
+                pkgs.foot
+                pkgs.xterm
+              ]
+            );
             LEANFRAN_CLI = "${leanfran}/bin/leanfran";
             FONTCONFIG_FILE = fontsConf;
             SELLAITE_NOVNC_DIR = novncDir;
@@ -67,7 +74,10 @@
               cargoLock.lockFile = ./Cargo.lock;
               nativeBuildInputs = [ pkgs.makeWrapper ];
               LEANFRAN_OFFLINE = "1";
-              nativeCheckInputs = desktopTools ++ [ pkgs.foot ];
+              nativeCheckInputs = desktopTools ++ [
+                pkgs.foot
+                pkgs.xterm
+              ];
               FONTCONFIG_FILE = fontsConf;
               SELLAITE_NOVNC_DIR = novncDir;
               postInstall = "wrapProgram $out/bin/sellaite --prefix PATH : ${pkgs.lib.makeBinPath desktopTools} --set-default SELLAITE_NOVNC_DIR ${novncDir} --set-default SELLAITE_ATSPI_LIBRARY ${atspiLibrary}";

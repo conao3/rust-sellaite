@@ -52,7 +52,7 @@ fn tools() -> Value {
         },
         {
             "name": "launch",
-            "description": "Start a program inside the desktop, detached, with the desktop's WAYLAND_DISPLAY, XDG_RUNTIME_DIR and SWAYSOCK. stop_desktop stops it and every process it started. With wait_for_window, returns after a window of the program (or of a process it started) has mapped; a new window gets the agent seat's keyboard focus, so type and key can follow without a click. Returns Pid and, when waited, Window (Id, AppId, Pid, Name).",
+            "description": "Start a program inside the desktop, detached, with the desktop's WAYLAND_DISPLAY, XDG_RUNTIME_DIR and SWAYSOCK, and its Xwayland DISPLAY when sway runs Xwayland, so X11 programs open too. stop_desktop stops it and every process it started. With wait_for_window, returns after a window of the program (or of a process it started) has mapped; a new window gets the agent seat's keyboard focus, so type and key can follow without a click. Returns Pid and, when waited, Window (Id, AppId, Pid, Name, and Class for an X11 window).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -280,6 +280,7 @@ impl Server {
                         "AppId": window["app_id"],
                         "Pid": window["pid"],
                         "Name": window["name"],
+                        "Class": window["window_properties"]["class"],
                     });
                 }
                 let mut result = text_result(body.to_string());

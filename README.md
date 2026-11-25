@@ -112,6 +112,7 @@ binary directory (usually `$HOME/.cargo/bin`) to your `PATH`.
 | `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Resolve AT-SPI2 targets for sensitive input and approvals. |
 | noVNC | Render the desktop in the dashboard. |
 | `foot`, a font and D-Bus | Provide a terminal for the quick start and a session bus for accessibility-enabled apps. |
+| Xwayland (`xwayland` on Ubuntu, Debian and openSUSE, `xorg-xwayland` on Arch, `xorg-x11-server-Xwayland` on Fedora) | Run X11-only applications such as `xterm` in the desktop. sway starts Xwayland when the first X11 client connects, and `launch` gives programs the desktop's own `DISPLAY`. Wayland applications do not need it. |
 
 The headless install check covers sway 1.11 and wayvnc 0.9.1 on Ubuntu
 26.04 LTS, and sway 1.12 and wayvnc 0.10.2 on Arch. Older versions and the
@@ -163,7 +164,7 @@ configuration examples.
 |---|---|---|
 | `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with two seats, `agent` for the agent and `seat0` for you, and a VNC server (wayvnc) on `seat0`. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
 | `stop_desktop` | | Stops sway, wayvnc and the processes carrying the desktop's `SELLAITE_DESKTOP` marker. |
-| `launch` | `argv`, `wait_for_window` (default false), `timeout_ms` (default 10000, at most 60000) | Starts a program in the desktop, detached, with the desktop's `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`, and returns its `Pid`. With `wait_for_window`, returns once a window of the program or of a process it started has mapped, with `Window` (`Id`, `AppId`, `Pid`, `Name`), or an error when the program exits first or the timeout passes. |
+| `launch` | `argv`, `wait_for_window` (default false), `timeout_ms` (default 10000, at most 60000) | Starts a program in the desktop, detached, with the desktop's `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`, and the desktop's Xwayland `DISPLAY` when sway runs Xwayland, and returns its `Pid`. With `wait_for_window`, returns once a window of the program or of a process it started has mapped, with `Window` (`Id`, `AppId`, `Pid`, `Name`, and `Class` for an X11 window), or an error when the program exits first or the timeout passes. |
 | `wait_for_stable_screen` | `quiet_ms` (default 500), `timeout_ms` (default 10000) | Samples the desktop until its screenshots agree for the quiet period, then reports elapsed time. Use after a window maps. This measures visual stability and can time out on animating screens. |
 | `wait` | `milliseconds` (at most 30000) | Sleeps. |
 | `screenshot` | | Returns the whole desktop as a PNG image. |

@@ -103,6 +103,17 @@ impl WindowEvents {
     }
 }
 
+pub fn xwayland_display(compositor: u32) -> Option<String> {
+    (0..=32).find_map(|display| {
+        let lock = fs::read_to_string(format!("/tmp/.X{display}-lock")).ok()?;
+        let owner: u32 = lock
+            .trim_matches(|c: char| c.is_whitespace() || c == '\0')
+            .parse()
+            .ok()?;
+        (owner == compositor).then(|| format!(":{display}"))
+    })
+}
+
 pub fn user_focus(swaysock: &Path) -> Result<Option<u64>, String> {
     seat_focus(swaysock, crate::desktop::USER_SEAT)
 }

@@ -296,3 +296,51 @@ fn mcp_startup_cleans_up_marked_processes_from_a_stale_desktop() {
     assert!(marked(id).is_empty());
     assert!(!dir.path().exists());
 }
+
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+#[test]
+fn launch_opens_an_x11_window_through_the_desktops_xwayland() {
+    if !on_path("Xwayland") {
+        eprintln!("skipped: Xwayland is not on PATH (add xwayland to the devShell)");
+        return;
+    }
+    let mut mcp = Mcp::spawn_with_env([("DISPLAY", ":sellaite-user-display")]);
+    let info = mcp.call("start_desktop", json!({}))["structuredContent"].clone();
+    let swaysock = PathBuf::from(info["Swaysock"].as_str().unwrap());
+
+    let launched = mcp.call(
+        "launch",
+        json!({"argv": ["xterm", "-e", "sh"], "wait_for_window": true}),
+    )["structuredContent"]
+        .clone();
+    let xterm = launched["Pid"].as_u64().unwrap() as u32;
+    let window = &launched["Window"];
+    assert_eq!(window["Class"], "XTerm", "{launched}");
+    assert_eq!(window["Pid"], xterm, "{launched}");
+    assert_eq!(
+        seat_focus(&swaysock, "agent"),
+        window["Id"].as_i64().unwrap(),
+        "the X11 window does not have the agent seat's focus"
+    );
+
+    let environment = std::fs::read(format!("/proc/{xterm}/environ")).unwrap();
+    let display = environment
+        .split(|&byte| byte == 0)
+        .find_map(|entry| entry.strip_prefix(b"DISPLAY="))
+        .map(|value| String::from_utf8(value.to_vec()).unwrap())
+        .expect("xterm has no DISPLAY");
+    let lock = std::fs::read_to_string(format!("/tmp/.X{}-lock", &display[1..])).unwrap();
+    let owner = lock.trim_matches(|c: char| c.is_whitespace() || c == '\0');
+    let sway = std::fs::read_to_string(format!("/proc/{owner}/stat")).unwrap_or_default();
+    assert!(
+        sway.contains("(sway)"),
+        "DISPLAY {display} does not belong to the desktop's sway: {sway}"
+    );
+
+    mcp.call("stop_desktop", json!({}));
+    assert!(!running(xterm), "xterm outlived stop_desktop");
+}

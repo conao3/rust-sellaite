@@ -349,6 +349,9 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
+        if let Some(display) = launch::xwayland_display(self.sway.id()) {
+            command.env("DISPLAY", display);
+        }
         unsafe {
             command.pre_exec(|| {
                 libc::setsid();

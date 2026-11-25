@@ -30,8 +30,9 @@ user's cursor or focus. See `README.md` for the goal.
   `.leanfran/cache/` and the Lean package in `lean/`; commit both. The Nix
   build sets `LEANFRAN_OFFLINE=1` and uses the cache only.
 - Rust owns process management (sway, wayvnc, and the programs of `launch`,
-  which `src/launch.rs` finds by `SELLAITE_DESKTOP=<Id>` in `/proc/<pid>/environ`
-  and waits for through sway IPC window events), the Wayland protocol clients
+  which `src/launch.rs` finds by `SELLAITE_DESKTOP=<Id>` in `/proc/<pid>/environ`,
+  waits for through sway IPC window events, and gives the Xwayland `DISPLAY`
+  whose `/tmp/.X<n>-lock` holds sway's PID), the Wayland protocol clients
   (virtual pointer and keyboard, screen capture, the ext-idle-notify-v1 watcher
   of `seat0`), the MCP server, the dashboard (HTTP, the WebSocket proxy to
   wayvnc), and the CLI (`clap`).
@@ -165,6 +166,13 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   with no sleep, and checks that `stop_desktop` ends foot, its shell and an
   orphaned `sleep`. Typing without the window wait loses the text, and the
   stop check fails when `stop_desktop` signals only the direct children.
+- `tests/launch.rs` also launches `xterm` with `wait_for_window` and checks
+  that the X11 window maps with class `XTerm` and the agent seat's focus,
+  and that its `DISPLAY` is the Xwayland display whose `/tmp/.X<n>-lock`
+  holds the desktop's sway PID, not the `DISPLAY` of the MCP server. It
+  fails when `launch` does not set `DISPLAY`, and it is skipped only when
+  `Xwayland` is not on `PATH`. The devShell and `nativeCheckInputs` carry
+  `xwayland` and `xterm`.
 - `tests/dashboard.rs` checks pause end to end: stale runtime directories
   are removed when `mcp serve` starts, the agent's `click`, `type` and `key`
   leave `seat0` idle, a raw RFB client on `vnc.sock` that only connects does
