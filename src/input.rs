@@ -14,7 +14,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1;
 
-use crate::chord::Chord;
+use crate::chord::{Chord, Key};
 use crate::keymap;
 
 const BTN_LEFT: u32 = 0x110;
@@ -117,6 +117,8 @@ pub struct SeatInput {
     width: u32,
     height: u32,
     epoch: Instant,
+    chars: Vec<char>,
+    uploaded: Option<String>,
 }
 
 impl SeatInput {
@@ -165,6 +167,8 @@ impl SeatInput {
             width,
             height,
             epoch: Instant::now(),
+            chars: keymap::base(),
+            uploaded: None,
         };
         input.sync()?;
         Ok(input)
@@ -207,11 +211,11 @@ impl SeatInput {
         }
         let chars: Vec<char> = text.chars().collect();
         for chunk in keymap::chunks(&chars) {
-            let symbols = keymap::slots(&chunk);
-            self.upload_keymap(&keymap::xkb_source(&symbols))?;
+            self.chars = keymap::layout(&chunk);
+            self.upload_keymap()?;
             for c in &chunk {
                 let key =
-                    keymap::evdev_key(&symbols, *c).ok_or_else(|| format!("no key for {c:?}"))?;
+                    keymap::char_key(&self.chars, *c).ok_or_else(|| format!("no key for {c:?}"))?;
                 let time = self.time();
                 self.keyboard.key(time, key, KEY_PRESSED);
                 self.keyboard.key(time, key, KEY_RELEASED);
@@ -222,19 +226,37 @@ impl SeatInput {
     }
 
     pub fn key(&mut self, chord: &Chord) -> Result<(), String> {
-        self.upload_keymap(&keymap::chord_source(&chord.keysym))?;
+        let key = match &chord.key {
+            Key::Char(c) => {
+                if !self.chars.contains(c) {
+                    self.chars = keymap::layout(&[*c]);
+                }
+                self.upload_keymap()?;
+                keymap::char_key(&self.chars, *c)
+            }
+            Key::Named(keysym) => {
+                self.upload_keymap()?;
+                keymap::named_key(keysym)
+            }
+        }
+        .ok_or_else(|| "no key for the chord".to_string())?;
         let time = self.time();
         self.keyboard.modifiers(chord.mask, 0, 0, 0);
-        self.keyboard.key(time, keymap::CHORD_KEY, KEY_PRESSED);
-        self.keyboard.key(time, keymap::CHORD_KEY, KEY_RELEASED);
+        self.keyboard.key(time, key, KEY_PRESSED);
+        self.keyboard.key(time, key, KEY_RELEASED);
         self.keyboard.modifiers(0, 0, 0, 0);
         self.sync()
     }
 
-    fn upload_keymap(&mut self, source: &str) -> Result<(), String> {
-        let fd = keymap_fd(source)?;
+    fn upload_keymap(&mut self) -> Result<(), String> {
+        let source = keymap::source(&self.chars);
+        if self.uploaded.as_ref() == Some(&source) {
+            return Ok(());
+        }
+        let fd = keymap_fd(&source)?;
         self.keyboard
             .keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), source.len() as u32 + 1);
+        self.uploaded = Some(source);
         self.sync()
     }
 }

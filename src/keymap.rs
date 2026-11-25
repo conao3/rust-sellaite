@@ -181,12 +181,60 @@ const LAST_KEYCODE: u32 = 255;
 
 pub const CAPACITY: usize = (LAST_KEYCODE - FIRST_KEYCODE + 1) as usize;
 
+const MODIFIER_KEYS: [(Modifier, &str); 4] = [
+    (Modifier::Shift, "Shift_L"),
+    (Modifier::Control, "Control_L"),
+    (Modifier::Alt, "Alt_L"),
+    (Modifier::Logo, "Super_L"),
+];
+
+const NAMED_KEYS: [&str; 12] = [
+    "Delete",
+    "Insert",
+    "Home",
+    "End",
+    "Page_Up",
+    "Page_Down",
+    "Left",
+    "Right",
+    "Up",
+    "Down",
+    "Menu",
+    "Print",
+];
+
+const FUNCTION_KEYS: usize = 24;
+
+const RESERVED: usize = MODIFIER_KEYS.len() + NAMED_KEYS.len() + FUNCTION_KEYS;
+
+fn named_keysyms() -> impl Iterator<Item = String> {
+    NAMED_KEYS
+        .iter()
+        .map(|k| k.to_string())
+        .chain((1..=FUNCTION_KEYS).map(|n| format!("F{n}")))
+}
+
+pub fn named_key(keysym: &str) -> Option<u32> {
+    named_keysyms()
+        .position(|k| k == keysym)
+        .map(|i| (MODIFIER_KEYS.len() + i + 1) as u32)
+}
+
+pub fn base() -> Vec<char> {
+    (' '..='~').chain(['\n', '\t', '\u{8}', '\u{1b}']).collect()
+}
+
 pub fn chunks(text: &[char]) -> Vec<Vec<char>> {
-    model::split(leanfran::Nat::from(CAPACITY as u64), text.to_vec())
+    let cap = CAPACITY - RESERVED - base().len();
+    model::split(leanfran::Nat::from(cap as u64), text.to_vec())
 }
 
 pub fn slots(text: &[char]) -> Vec<char> {
     model::slots(text.to_vec())
+}
+
+pub fn layout(piece: &[char]) -> Vec<char> {
+    slots(&[base(), piece.to_vec()].concat())
 }
 
 pub fn evdev_key(slots: &[char], c: char) -> Option<u32> {
@@ -194,7 +242,11 @@ pub fn evdev_key(slots: &[char], c: char) -> Option<u32> {
         .map(|key| u64::try_from(key).expect("a key below the keymap capacity") as u32)
 }
 
-pub fn keysym(c: char) -> String {
+pub fn char_key(chars: &[char], c: char) -> Option<u32> {
+    evdev_key(chars, c).map(|key| key + RESERVED as u32)
+}
+
+fn keysym(c: char) -> String {
     match c {
         '\n' => "Return".to_string(),
         '\t' => "Tab".to_string(),
@@ -204,26 +256,18 @@ pub fn keysym(c: char) -> String {
     }
 }
 
-pub fn xkb_source(slots: &[char]) -> String {
-    let keys: Vec<(String, Option<String>)> = slots.iter().map(|c| (keysym(*c), None)).collect();
-    render(&keys)
-}
-
-pub const CHORD_KEY: u32 = 1;
-
-pub fn chord_source(keysym: &str) -> String {
-    let mut keys = vec![(keysym.to_string(), None)];
-    for (modifier, key) in [
-        (Modifier::Shift, "Shift_L"),
-        (Modifier::Control, "Control_L"),
-        (Modifier::Alt, "Alt_L"),
-        (Modifier::Logo, "Super_L"),
-    ] {
-        keys.push((
-            key.to_string(),
-            Some(chord::model::modifier_xkb_name(modifier)),
-        ));
-    }
+pub fn source(chars: &[char]) -> String {
+    let mut keys: Vec<(String, Option<String>)> = MODIFIER_KEYS
+        .iter()
+        .map(|(modifier, key)| {
+            (
+                key.to_string(),
+                Some(chord::model::modifier_xkb_name(*modifier)),
+            )
+        })
+        .collect();
+    keys.extend(named_keysyms().map(|k| (k, None)));
+    keys.extend(chars.iter().map(|c| (keysym(*c), None)));
     render(&keys)
 }
 
@@ -270,29 +314,56 @@ mod tests {
     fn chunks_cover_the_text_within_capacity() {
         let text: Vec<char> = (0..600u32)
             .map(|i| char::from_u32(0x4e00 + i % 400).unwrap())
+            .chain("ascii text".chars())
             .collect();
         let pieces = chunks(&text);
         assert_eq!(pieces.concat(), text);
-        assert!(pieces.iter().all(|p| slots(p).len() <= CAPACITY));
+        assert!(
+            pieces
+                .iter()
+                .all(|p| layout(p).len() + RESERVED <= CAPACITY)
+        );
         assert!(pieces.len() > 1);
     }
 
     #[test]
-    fn keymap_names_unicode_and_control_keys() {
-        let source = xkb_source(&['a', '\n', 'あ']);
-        assert!(source.contains("<K9> = 9;"));
-        assert!(source.contains("key <K9> { [ U0061 ] };"));
-        assert!(source.contains("key <K10> { [ Return ] };"));
-        assert!(source.contains("key <K11> { [ U3042 ] };"));
-        assert!(!source.contains("modifier_map"));
+    fn the_layout_keeps_the_base_keys_in_place() {
+        let base = base();
+        assert_eq!(slots(&base), base);
+        for piece in ["", "hello, world\n", "あいう abc", "\u{1b}é"] {
+            let piece: Vec<char> = piece.chars().collect();
+            let chars = layout(&piece);
+            assert_eq!(chars[..base.len()], base[..]);
+            for c in &piece {
+                let key = char_key(&chars, *c).unwrap();
+                assert!(key > RESERVED as u32);
+                assert_eq!(chars[(key as usize) - RESERVED - 1], *c);
+            }
+        }
+        assert_eq!(layout(&['a', '~']), base);
+        assert_eq!(char_key(&base, ' '), Some(RESERVED as u32 + 1));
     }
 
     #[test]
-    fn chord_keymap_maps_the_modifier_keys() {
-        let source = chord_source("Tab");
-        assert!(source.contains("key <K9> { [ Tab ] };"));
-        assert!(source.contains("key <K11> { [ Control_L ] };"));
-        assert!(source.contains("modifier_map Control { <K11> };"));
-        assert!(source.contains("modifier_map Mod4 { <K13> };"));
+    fn named_keys_follow_the_modifier_keys() {
+        assert_eq!(named_key("Delete"), Some(5));
+        assert_eq!(named_key("F24"), Some(RESERVED as u32));
+        assert_eq!(named_key("Return"), None);
+    }
+
+    #[test]
+    fn keymap_names_unicode_control_named_and_modifier_keys() {
+        let source = source(&layout(&['a', '\n', 'あ']));
+        assert!(source.contains("<K9> = 9;"));
+        assert!(source.contains("key <K9> { [ Shift_L ] };"));
+        assert!(source.contains("key <K10> { [ Control_L ] };"));
+        assert!(source.contains("modifier_map Control { <K10> };"));
+        assert!(source.contains("modifier_map Mod4 { <K12> };"));
+        assert!(source.contains("key <K13> { [ Delete ] };"));
+        assert!(source.contains("key <K48> { [ F24 ] };"));
+        assert!(source.contains("key <K49> { [ U0020 ] };"));
+        assert!(source.contains("key <K114> { [ U0061 ] };"));
+        assert!(source.contains("key <K144> { [ Return ] };"));
+        assert!(source.contains("key <K148> { [ U3042 ] };"));
     }
 }

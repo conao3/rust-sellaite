@@ -56,11 +56,28 @@ user's cursor or focus. See `README.md` for the goal.
 
 ### `src/keymap.rs` (`pub mod model`)
 
-`type` uploads a keymap that binds each character of the text to its own
-key. Rust calls `split`, `slots` and `evdevKey`.
+`type` and `key` share one keymap layout (`keymap::source`, xkb keycodes 9
+to 255, `keymap::CAPACITY` = 247 keys): the modifier keys `Shift_L`,
+`Control_L`, `Alt_L` and `Super_L` with their `modifier_map` (evdev 1 to 4),
+the named keys of `key` (`Delete` to `Print`, then `F1` to `F24`, evdev 5
+to 40), and then one key per character of `keymap::layout piece`, which is
+`slots (base ++ piece)`. `keymap::base` holds printable ASCII, `\n`, `\t`,
+backspace and escape and stays a fixed prefix of every layout (the unit
+test `the_layout_keeps_the_base_keys_in_place`), so only the characters
+outside it are bound per piece. `SeatInput` uploads a keymap
+only when its source differs from the last one, so ASCII text and every
+chord except a non-ASCII character use one keymap that never changes.
+X11 clients decode a key event with the keymap Xwayland holds when they
+read it, so a keymap change while key events are in flight changes the
+characters of those events; Wayland clients read keymaps and keys in order.
+Xwayland also requires a compatibility map (`XkbCompileKeymapFromString`)
+and falls back to its default US keymap without one; the modifier keys keep
+interprets in the keymap that sway serializes for it. Rust calls `split`,
+`slots` and `evdevKey`.
 
 - `split cap text` cuts the text into pieces whose keymaps fit in `cap` keys
-  (`keymap::CAPACITY` = 247, xkb keycodes 9 to 255). Theorems: the pieces
+  (`keymap::chunks` passes the keys left after the reserved keys and
+  `keymap::base`). Theorems: the pieces
   concatenate to the text (`flatten_split`), every piece is non-empty and
   needs at most `cap` keys (`split_fits`), and a piece ends only when its
   keymap is full and the next character is new to it (`split_chained`).
@@ -76,17 +93,20 @@ key. Rust calls `split`, `slots` and `evdevKey`.
   `slots` and `evdevKey`: 26 mutants, 24 killed, no holes, 1 stillborn, and
   1 untested (`seen ++ [c]` turned into `[c] ++ seen`, which `chunksFrom`
   only reads by membership and length, so the output is the same).
-- Outside the audit: `keysym` and `xkb_source` in Rust, which render the
-  keymap as xkb text. The unit test `keymap_names_unicode_and_control_keys`
-  and the headless sway test check that the compositor accepts it.
+- Outside the audit: `keysym`, `layout`, `named_key`, `char_key` and
+  `source` in Rust, which place the keys and render the keymap as xkb text.
+  The unit tests `the_layout_keeps_the_base_keys_in_place` and
+  `keymap_names_unicode_control_named_and_modifier_keys` and the headless
+  sway tests check them.
 
 ### `src/chord.rs` (`pub mod model`)
 
-`key` parses `keys` such as `ctrl+l` or `alt+Tab`, uploads a keymap with the
-key at keycode 9 and the modifier keys bound to `Shift`, `Control`, `Mod1`
-and `Mod4`, sends the modifier mask with `zwp_virtual_keyboard_v1.modifiers`,
-presses and releases the key, and clears the mask. Rust calls `chord`,
-`mask` and `Modifier.xkbName`.
+`key` parses `keys` such as `ctrl+l` or `alt+Tab` into a `chord::Key`: a
+character (one character, or `Return`, `Tab`, `Escape`, `BackSpace`,
+`space` and `plus`) presses that character's key of the shared layout, and
+a named key presses its fixed key. It sends the modifier mask with
+`zwp_virtual_keyboard_v1.modifiers`, presses and releases the key, and
+clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
 
 - `chord text` splits the text on `+` (`pieces`) and gives the modifier
   parts and the last part as the key. Theorems: when it succeeds the parts
@@ -98,7 +118,7 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   modifier in the list has bit `i` (`testBit_mask`), distinct modifiers
   have distinct bits (`bit_injective`), and bit `m.bit` is the xkb real
   modifier named `m.xkbName` in the order Shift, Lock, Control, Mod1 to
-  Mod5 (`bit_xkbName`). `keymap::chord_source` writes `m.xkbName` in the
+  Mod5 (`bit_xkbName`). `keymap::source` writes `m.xkbName` in the
   `modifier_map` of each modifier key, so the mask and the keymap agree.
 - `#assay` (`audit/Audit/Chord.lean`) on `chord`, `piecesFrom`, `pieces`,
   `mask`, `Modifier.bit` and `Modifier.xkbName`: 57 mutants, 53 killed, no
@@ -107,7 +127,7 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
   empty part; random inputs rarely hold a `+`, and the unit test
   `rejects_empty_parts_and_unknown_names` rejects `ctrl+` and `+l`.
 - Outside the audit: the modifier and key name tables in Rust (`modifier`,
-  `named_key`), and the rest of `keymap::chord_source`. The unit tests in `src/chord.rs`
+  `named_key`), and the rest of `keymap::source`. The unit tests in `src/chord.rs`
   and `src/keymap.rs` and the headless sway test check them.
 
 ## Desktops, the dashboard and pause
@@ -169,9 +189,17 @@ presses and releases the key, and clears the mask. Rust calls `chord`,
 - `tests/launch.rs` also launches `xterm` with `wait_for_window` and checks
   that the X11 window maps with class `XTerm` and the agent seat's focus,
   and that its `DISPLAY` is the Xwayland display whose `/tmp/.X<n>-lock`
-  holds the desktop's sway PID, not the `DISPLAY` of the MCP server. It
-  fails when `launch` does not set `DISPLAY`, and it is skipped only when
-  `Xwayland` is not on `PATH`. The devShell and `nativeCheckInputs` carry
+  holds the desktop's sway PID, not the `DISPLAY` of the MCP server. xterm
+  runs `cat` into a file; the test types `discarded`, presses `ctrl+u`,
+  types printable ASCII with shifted symbols, presses `Return` with no
+  sleep, and checks that the file holds exactly the text and a newline, and
+  that `type` and `key` refuse characters outside `keymap::base` while the
+  X11 window has the agent seat's focus. It fails when `launch` does not set
+  `DISPLAY`, with the keymaps of `type` that bound no modifier keys
+  (Xwayland rejects them and xterm reads the US layout), and when `layout`
+  puts the piece before `keymap::base`, so that each call rebinds the keys
+  the previous call pressed (`discarded` and `ctrl+u` then arrive as other
+  characters). It is skipped only when `Xwayland` is not on `PATH`. The devShell and `nativeCheckInputs` carry
   `xwayland` and `xterm`.
 - `tests/dashboard.rs` checks pause end to end: stale runtime directories
   are removed when `mcp serve` starts, the agent's `click`, `type` and `key`

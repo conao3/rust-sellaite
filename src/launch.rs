@@ -127,6 +127,25 @@ pub fn seat_focus(swaysock: &Path, name: &str) -> Result<Option<u64>, String> {
         .filter(|&id| id != 0))
 }
 
+pub fn focuses_x11(swaysock: &Path, seat: &str) -> Result<bool, String> {
+    let Some(id) = seat_focus(swaysock, seat)? else {
+        return Ok(false);
+    };
+    let tree = swaymsg(swaysock, &["-t", "get_tree"])?;
+    Ok(find_node(&tree, id).is_some_and(|node| node["shell"] == "xwayland"))
+}
+
+fn find_node(node: &Value, id: u64) -> Option<&Value> {
+    if node["id"].as_u64() == Some(id) {
+        return Some(node);
+    }
+    ["nodes", "floating_nodes"]
+        .iter()
+        .filter_map(|key| node[key].as_array())
+        .flatten()
+        .find_map(|child| find_node(child, id))
+}
+
 pub fn restore_user_focus(
     swaysock: &Path,
     previous: Option<u64>,

@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::chord::Chord;
+use crate::chord::{Chord, Key};
 use crate::idle;
 use crate::input::{Button, SeatInput};
+use crate::keymap;
 use crate::launch::{self, WindowEvents};
 use crate::runtime;
 
@@ -273,11 +274,32 @@ impl Desktop {
     }
 
     pub fn type_text(&mut self, text: &str) -> Result<(), String> {
+        self.refuse_outside_base_in_x11(text.chars())?;
         self.input.type_text(text)
     }
 
     pub fn key(&mut self, chord: &Chord) -> Result<(), String> {
+        if let Key::Char(c) = chord.key {
+            self.refuse_outside_base_in_x11([c].into_iter())?;
+        }
         self.input.key(chord)
+    }
+
+    fn refuse_outside_base_in_x11(&self, chars: impl Iterator<Item = char>) -> Result<(), String> {
+        let base = keymap::base();
+        let mut outside = String::new();
+        for c in chars.filter(|c| !base.contains(c)) {
+            if !outside.contains(c) {
+                outside.push(c);
+            }
+        }
+        if outside.is_empty() || !launch::focuses_x11(&self.swaysock, AGENT_SEAT)? {
+            return Ok(());
+        }
+        Err(format!(
+            "the focused window is an X11 window, which receives only printable ASCII, Return, \
+             Tab, BackSpace and Escape from type and key; {outside:?} cannot be sent to it"
+        ))
     }
 
     pub fn launch(&mut self, argv: &[String], wait: Option<Duration>) -> Result<Launched, String> {

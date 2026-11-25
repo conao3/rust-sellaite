@@ -112,7 +112,7 @@ binary directory (usually `$HOME/.cargo/bin`) to your `PATH`.
 | `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Resolve AT-SPI2 targets for sensitive input and approvals. |
 | noVNC | Render the desktop in the dashboard. |
 | `foot`, a font and D-Bus | Provide a terminal for the quick start and a session bus for accessibility-enabled apps. |
-| Xwayland (`xwayland` on Ubuntu, Debian and openSUSE, `xorg-xwayland` on Arch, `xorg-x11-server-Xwayland` on Fedora) | Run X11-only applications such as `xterm` in the desktop. sway starts Xwayland when the first X11 client connects, and `launch` gives programs the desktop's own `DISPLAY`. Wayland applications do not need it. X11 windows open and take the agent seat's focus, but text from `type` arrives in them decoded with a US layout instead of the keymap `type` uploads, so the characters are wrong. |
+| Xwayland (`xwayland` on Ubuntu, Debian and openSUSE, `xorg-xwayland` on Arch, `xorg-x11-server-Xwayland` on Fedora) | Run X11-only applications such as `xterm` in the desktop. sway starts Xwayland when the first X11 client connects, and `launch` gives programs the desktop's own `DISPLAY`. Wayland applications do not need it. X11 windows open and take the agent seat's focus, and `type` and `key` send them printable ASCII (shifted symbols included), Return, Tab, BackSpace, Escape, the named keys of `key` and chords such as `ctrl+u`. Other characters return an error while an X11 window has the agent's focus. |
 
 The headless install check covers sway 1.11 and wayvnc 0.9.1 on Ubuntu
 26.04 LTS, and sway 1.12 and wayvnc 0.10.2 on Arch. Older versions and the
@@ -169,7 +169,7 @@ configuration examples.
 | `wait` | `milliseconds` (at most 30000) | Sleeps. |
 | `screenshot` | | Returns the whole desktop as a PNG image. |
 | `click` | `x`, `y`, `button` (`left`, `right`, `middle`) | Moves the agent's pointer and clicks. |
-| `type` | `text` | Types the text into the window that has the agent's keyboard focus. |
+| `type` | `text` | Types the text into the window that has the agent's keyboard focus. An X11 window receives printable ASCII, Return, Tab, BackSpace and Escape; other characters return an error. |
 | `key` | `keys` (`Return`, `ctrl+l`, `alt+Tab`, ...) | Presses a key or a chord on the agent's keyboard, with the modifiers (`shift`, `ctrl`, `alt`, `super`) held as modifier state. |
 
 The agent's clicks and keystrokes come from a virtual pointer and a virtual keyboard created on the `agent` seat, so they move only that seat's cursor and focus. Your seat keeps its own focus.

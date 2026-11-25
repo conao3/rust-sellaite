@@ -109,7 +109,7 @@ fn tools() -> Value {
         },
         {
             "name": "type",
-            "description": "Type text into the window that has the agent seat's keyboard focus.",
+            "description": "Type text into the window that has the agent seat's keyboard focus. An X11 window receives printable ASCII, newline, tab, backspace and escape; other characters return an error.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"text": {"type": "string"},

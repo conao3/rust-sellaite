@@ -151,13 +151,17 @@ leanfran::lean! {
     "#
 }
 
-use crate::keymap;
-
 pub use model::Modifier;
+
+#[derive(Debug, PartialEq)]
+pub enum Key {
+    Char(char),
+    Named(String),
+}
 
 pub struct Chord {
     pub mask: u32,
-    pub keysym: String,
+    pub key: Key,
 }
 
 fn modifier(name: &str) -> Option<Modifier> {
@@ -170,13 +174,21 @@ fn modifier(name: &str) -> Option<Modifier> {
     }
 }
 
-fn named_key(name: &str) -> Option<String> {
+fn named_key(name: &str) -> Option<Key> {
     let lower = name.to_ascii_lowercase();
+    let character = match lower.as_str() {
+        "return" | "enter" => Some('\n'),
+        "tab" => Some('\t'),
+        "escape" | "esc" => Some('\u{1b}'),
+        "backspace" => Some('\u{8}'),
+        "space" => Some(' '),
+        "plus" => Some('+'),
+        _ => None,
+    };
+    if let Some(c) = character {
+        return Some(Key::Char(c));
+    }
     let known = match lower.as_str() {
-        "return" | "enter" => "Return",
-        "tab" => "Tab",
-        "escape" | "esc" => "Escape",
-        "backspace" => "BackSpace",
         "delete" | "del" => "Delete",
         "insert" => "Insert",
         "home" => "Home",
@@ -187,8 +199,6 @@ fn named_key(name: &str) -> Option<String> {
         "right" => "Right",
         "up" => "Up",
         "down" => "Down",
-        "space" => "space",
-        "plus" => "plus",
         "menu" => "Menu",
         "print" => "Print",
         _ => {
@@ -196,16 +206,16 @@ fn named_key(name: &str) -> Option<String> {
                 .strip_prefix('f')
                 .and_then(|n| n.parse::<u32>().ok())
                 .filter(|n| (1..=24).contains(n) && lower == format!("f{n}"))
-                .map(|n| format!("F{n}"));
+                .map(|n| Key::Named(format!("F{n}")));
         }
     };
-    Some(known.to_string())
+    Some(Key::Named(known.to_string()))
 }
 
-fn keysym(name: &str) -> Result<String, String> {
+fn key(name: &str) -> Result<Key, String> {
     let mut chars = name.chars();
     if let (Some(c), None) = (chars.next(), chars.next()) {
-        return Ok(keymap::keysym(c));
+        return Ok(Key::Char(c));
     }
     named_key(name).ok_or_else(|| {
         format!(
@@ -228,26 +238,52 @@ pub fn parse(text: &str) -> Result<Chord, String> {
                 .ok_or_else(|| format!("unknown modifier {name:?}; use shift, ctrl, alt or super"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let key: String = key.iter().collect();
-    let keysym = keysym(&key)?;
+    let name: String = key.iter().collect();
+    let key = self::key(&name)?;
     let mask = u64::try_from(model::mask(modifiers)).expect("a mask below 2^7") as u32;
-    Ok(Chord { mask, keysym })
+    Ok(Chord { mask, key })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keymap;
 
     #[test]
     fn modifiers_become_real_modifier_bits() {
         let chord = parse("ctrl+l").unwrap();
-        assert_eq!((chord.mask, chord.keysym.as_str()), (4, "U006C"));
+        assert_eq!((chord.mask, chord.key), (4, Key::Char('l')));
         let chord = parse("Shift+Alt+super+ctrl+Tab").unwrap();
-        assert_eq!((chord.mask, chord.keysym.as_str()), (1 | 4 | 8 | 64, "Tab"));
+        assert_eq!((chord.mask, chord.key), (1 | 4 | 8 | 64, Key::Char('\t')));
         let chord = parse("Return").unwrap();
-        assert_eq!((chord.mask, chord.keysym.as_str()), (0, "Return"));
-        assert_eq!(parse("ctrl+plus").unwrap().keysym, "plus");
-        assert_eq!(parse("F12").unwrap().keysym, "F12");
+        assert_eq!((chord.mask, chord.key), (0, Key::Char('\n')));
+        assert_eq!(parse("ctrl+plus").unwrap().key, Key::Char('+'));
+        assert_eq!(parse("F12").unwrap().key, Key::Named("F12".to_string()));
+    }
+
+    #[test]
+    fn every_named_key_has_a_key_in_the_keymap() {
+        for name in [
+            "Delete",
+            "Insert",
+            "Home",
+            "End",
+            "Page_Up",
+            "Page_Down",
+            "Left",
+            "Right",
+            "Up",
+            "Down",
+            "Menu",
+            "Print",
+            "F1",
+            "F24",
+        ] {
+            let Key::Named(keysym) = parse(name).unwrap().key else {
+                panic!("{name} is a character");
+            };
+            assert!(keymap::named_key(&keysym).is_some(), "{name} has no key");
+        }
     }
 
     #[test]

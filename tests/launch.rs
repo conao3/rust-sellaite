@@ -313,13 +313,19 @@ fn launch_opens_an_x11_window_through_the_desktops_xwayland() {
         .unwrap();
         return;
     }
+    let out = std::env::temp_dir().join(format!("sellaite-xterm-{}", std::process::id()));
+    std::fs::create_dir_all(&out).unwrap();
+    let file = out.join("typed");
     let mut mcp = Mcp::spawn_with_env([("DISPLAY", ":sellaite-user-display")]);
     let info = mcp.call("start_desktop", json!({}))["structuredContent"].clone();
     let swaysock = PathBuf::from(info["Swaysock"].as_str().unwrap());
 
     let launched = mcp.call(
         "launch",
-        json!({"argv": ["xterm", "-e", "sh"], "wait_for_window": true}),
+        json!({
+            "argv": ["xterm", "-e", "sh", "-c", format!("cat > '{}'", file.display())],
+            "wait_for_window": true
+        }),
     )["structuredContent"]
         .clone();
     let xterm = launched["Pid"].as_u64().unwrap() as u32;
@@ -353,6 +359,33 @@ fn launch_opens_an_x11_window_through_the_desktops_xwayland() {
                 .any(|entry| entry == runtime_dir.as_bytes()),
         "DISPLAY {display} does not belong to the desktop's sway: {sway}"
     );
+
+    let text = "Hello, World! ~`@#$%^&*()_+-={}[]|\\:;\"'<>?,./ 0123456789 xyz";
+    mcp.call("type", json!({"text": "discarded"}));
+    mcp.call("key", json!({"keys": "ctrl+u"}));
+    mcp.call("type", json!({"text": text}));
+    mcp.call("key", json!({"keys": "Return"}));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let typed = loop {
+        let typed = std::fs::read_to_string(&file).unwrap_or_default();
+        if typed.ends_with('\n') || Instant::now() > deadline {
+            break typed;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        typed,
+        format!("{text}\n"),
+        "xterm received other characters"
+    );
+    let message = error_text(&mut mcp, "type", json!({"text": "café ü"}));
+    assert!(
+        message.contains("X11 window") && message.contains("\"éü\""),
+        "{message}"
+    );
+    let message = error_text(&mut mcp, "key", json!({"keys": "ctrl+é"}));
+    assert!(message.contains("X11 window"), "{message}");
+    std::fs::remove_dir_all(&out).unwrap();
 
     mcp.call("stop_desktop", json!({}));
     assert!(!running(xterm), "xterm outlived stop_desktop");
