@@ -32,7 +32,8 @@ user's cursor or focus. See `README.md` for the goal.
 - Rust owns process management (sway, wayvnc, and the programs of `launch`,
   which `src/launch.rs` finds by `SELLAITE_DESKTOP=<Id>` in `/proc/<pid>/environ`,
   waits for through sway IPC window events, and gives the Xwayland `DISPLAY`
-  whose `/tmp/.X<n>-lock` holds sway's PID), the Wayland protocol clients
+  whose `/tmp/.X<n>-lock` holds sway's PID), the X11 client of
+  `launch::Remapper` (x11rb), the Wayland protocol clients
   (virtual pointer and keyboard, screen capture, the ext-idle-notify-v1 watcher
   of `seat0`), the MCP server, the dashboard (HTTP, the WebSocket proxy to
   wayvnc), and the CLI (`clap`).
@@ -233,3 +234,19 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   xterm test of `tests/launch.rs` failed in 20 of 450 runs with
   `mapped no window`, and the X window stays mapped on the X side with
   `WM_STATE` Normal while sway has no view of it.
+- For a sway without that patch, `launch::Remapper` recovers such a window
+  while `launch` waits for a window (with `wait_for_window`, and in the
+  60 s focus watch without it). Once the desktop's Xwayland runs (a process
+  `Xwayland` with the display in its arguments; sway starts it lazily, so
+  the remapper never connects first), it checks the top-level windows every
+  250 ms after a 500 ms grace. A window that is viewable, not
+  override-redirect, owned by the launched process tree (XRes client PID,
+  else `_NET_WM_PID`) and absent from the `window` fields of the xwayland
+  nodes of `get_tree` for 500 ms is unmapped and mapped again, which gives
+  it a new wl_surface, and the check repeats until the deadline. In a
+  healthy launch the view appeared at most 117 ms after xterm started (1000
+  launches). Measured with the same test binary and the sway of nixpkgs
+  (`PATH=<sway-unwrapped>/bin:$PATH`), interleaved, 950 runs each of the
+  xterm test: 4 `mapped no window` with the sellaite of 3dcc929 and 0 with
+  the recovery, which fired in 4 runs; with the patched sway and with foot
+  it fired in none of 450 runs each.

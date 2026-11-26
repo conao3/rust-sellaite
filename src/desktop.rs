@@ -371,7 +371,8 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
-        if let Some(display) = launch::xwayland_display(self.sway.id()) {
+        let display = launch::xwayland_display(self.sway.id());
+        if let Some(display) = &display {
             command.env("DISPLAY", display);
         }
         unsafe {
@@ -384,10 +385,15 @@ impl Desktop {
         let pid = child.id();
         self.launched.push(child);
         let child = self.launched.last_mut().unwrap();
+        let mut remapper =
+            display.map(|display| launch::Remapper::new(display, self.swaysock.clone()));
         let window = match wait {
             Some(timeout) => {
                 let deadline = Instant::now() + timeout;
                 loop {
+                    if let Some(remapper) = &mut remapper {
+                        remapper.poll(pid);
+                    }
                     if let Some(window) = events.new_window_of(pid, deadline)? {
                         launch::restore_user_focus(&self.swaysock, user_focus, &window)?;
                         break Some(window);
@@ -407,11 +413,14 @@ impl Desktop {
                 }
             }
             None => {
-                if user_focus.is_some() {
+                if user_focus.is_some() || remapper.is_some() {
                     let swaysock = self.swaysock.clone();
                     std::thread::spawn(move || {
                         let deadline = Instant::now() + Duration::from_secs(60);
                         while Instant::now() < deadline && launch::running(pid) {
+                            if let Some(remapper) = &mut remapper {
+                                remapper.poll(pid);
+                            }
                             match events.new_window_of(pid, deadline) {
                                 Ok(Some(window)) => {
                                     if let Err(e) =

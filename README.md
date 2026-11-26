@@ -327,13 +327,18 @@ The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2
   with `mktemp -d /tmp/wayland.XXXXXX`.
 - **An X11 window never appears.** wlroots 0.20.2, which sway 1.12 uses, can
   leave an X11 window unmapped when Xwayland commits the window's first frame
-  before wlroots pairs the window with its surface. The window stays
-  invisible to sway, and `launch` with `wait_for_window` returns `mapped no
-  window`; in the xterm test it happened in 20 of 450 launches. wlroots fixed
-  it upstream in
+  before wlroots pairs the window with its surface. The window is mapped on
+  the X side but invisible to sway. wlroots fixed it upstream in
   [08a9f9f1](https://gitlab.freedesktop.org/wlroots/wlroots/-/commit/08a9f9f14fc8fd173d1768588699d2e152b6cde6),
-  which is not in a release yet. The Nix package of sellaite runs a sway built
-  with that patch.
+  which is not in a release yet, and the Nix package of sellaite runs a sway
+  built with that patch. With another sway, `launch` recovers the window:
+  while it waits for a window, it checks the desktop's Xwayland every 250 ms,
+  and a top-level window of the launched program (or of a process it started)
+  that has been viewable for 500 ms without a sway view is unmapped and mapped
+  again, which gives it a new surface. sellaite writes `sellaite: remapped X11
+  window ...` to its standard error when it does this. In 950 runs of the
+  xterm test with an unpatched sway, `launch` returned `mapped no window` 4
+  times without the recovery and 0 times with it.
 - **Codex waits for tool approval.** In an interactive Codex session, use
   `/mcp` to check that sellaite is active, then review and approve the tool
   call when prompted. For an unattended run that needs pre-approval, set
