@@ -1,16 +1,40 @@
+<p align="center">
+  <img src="docs/assets/banner.png" alt="sellaite: give an AI computer-use agent its own Linux desktop and its own cursor" width="880">
+</p>
+
+<p align="center"><strong>Give an AI computer-use agent its own Linux desktop and its own cursor, so it never takes over yours</strong></p>
+
+<p align="center">
+  <a href="https://github.com/conao3/rust-sellaite/releases/latest"><img src="https://img.shields.io/github/v/release/conao3/rust-sellaite" alt="Latest release"></a>
+  <a href="https://github.com/conao3/rust-sellaite/actions/workflows/ci.yml"><img src="https://github.com/conao3/rust-sellaite/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/conao3/rust-sellaite" alt="License: Apache-2.0"></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.89%2B-orange" alt="Rust 1.89+"></a>
+  <a href="lean/lean-toolchain"><img src="https://img.shields.io/badge/Lean-v4.35.0-blue" alt="Lean v4.35.0"></a>
+  <a href="https://github.com/conao3/rust-sellaite/stargazers"><img src="https://img.shields.io/github/stars/conao3/rust-sellaite?style=flat" alt="GitHub stars"></a>
+</p>
+
+<p align="center">
+  <a href="#install-on-linux">Install</a> |
+  <a href="#quick-start">Quick start</a> |
+  <a href="#mcp-tools">MCP tools</a> |
+  <a href="#dashboard">Dashboard</a> |
+  <a href="#use-with-claude-code--codex">Claude Code / Codex</a> |
+  <a href="#security">Security</a> |
+  <a href="#development">Development</a> |
+  <a href="https://github.com/conao3/rust-sellaite/releases">Releases</a>
+</p>
+
 # sellaite
 
-Give an AI computer-use agent its own Linux desktop and its own cursor, so it never takes over yours.
+Each agent runs in its own headless Wayland session (sway) with its own input seat: its own pointer and its own keyboard focus. A second seat is yours. You watch the agent's desktop in the browser and step in when you need to, without fighting it for the mouse. Several agents can run side by side, each on its own desktop.
 
-Each agent runs in its own headless Wayland session (sway). Inside that session the agent has its own input seat: its own pointer and keyboard focus. A second seat is reserved for you, so you can watch the agent's desktop in the browser and step in when needed without fighting it for the mouse. Several agents can run side by side, each on its own desktop.
-
-The agent talks to sellaite over MCP (`start_desktop`, `launch`, `screenshot`, `click`, `type`, ...), so it works with Claude Code, Codex and other MCP clients.
+The agent talks to sellaite over MCP (`start_desktop`, `launch`, `screenshot`, `click`, `type`, ...), so sellaite works with Claude Code, Codex and other MCP clients.
 
 The name comes from the mineral sellaite, read as the Latin *sella* (seat).
 
 ## Status
 
-Early development. The MCP server runs one desktop with an agent seat and a user seat, and the dashboard shows each desktop in the browser, sends its agent notes and pauses it. The dashboard can also take over input and approve sensitive click and type requests.
+Early development. The MCP server runs 1 desktop with an agent seat and a user seat. The dashboard shows each desktop in the browser, sends notes to its agent and pauses it. It can also take over input and approve sensitive click and type requests.
 
 ## Security
 
@@ -22,7 +46,7 @@ Early development. The MCP server runs one desktop with an agent seat and a user
 - **Approval** helps catch mistakes in `click` and `type`. Detection relies on the agent's declared intent and the accessibility information sellaite can retrieve. Browser redirects, keystrokes sent with `key`, commands run with `launch`, and actions taken through other tools fall outside these checks.
 - **Dashboard authentication** protects the HTTP and WebSocket endpoints from callers without the dashboard credential. Host and Origin checks limit cross-origin browser access. For remote access, the trusted Tailscale Serve proxy supplies the login checked against the allowlist. Keep the backend on loopback and the startup URL private. Same-account programs can access the desktop runtime files and sockets directly.
 
-Use a dedicated unprivileged Linux user or a container for an agent you do not fully trust. Give it a separate home and browser profile, and keep your personal files, credentials and host sockets outside its reach. Apply any network restrictions you need at the operating-system or container boundary.
+Use a dedicated unprivileged Linux user or a container for an agent you don't fully trust. Give it a separate home and browser profile, and keep your personal files, credentials and host sockets outside its reach. Apply any network restrictions you need at the operating-system or container boundary.
 
 Report vulnerabilities through the private channel in [SECURITY.md](SECURITY.md).
 
@@ -112,7 +136,7 @@ binary directory (usually `$HOME/.cargo/bin`) to your `PATH`.
 | `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Resolve AT-SPI2 targets for sensitive input and approvals. |
 | noVNC | Render the desktop in the dashboard. |
 | `foot`, a font and D-Bus | Provide a terminal for the quick start and a session bus for accessibility-enabled apps. |
-| Xwayland (`xwayland` on Ubuntu, Debian and openSUSE, `xorg-xwayland` on Arch, `xorg-x11-server-Xwayland` on Fedora) | Run X11-only applications such as `xterm` in the desktop. sway starts Xwayland when the first X11 client connects, and `launch` gives programs the desktop's own `DISPLAY`. Wayland applications do not need it. X11 windows open and take the agent seat's focus, and `type` and `key` send them printable ASCII (shifted symbols included), Return, Tab, BackSpace, Escape, the named keys of `key` and chords such as `ctrl+u`. Other characters return an error while an X11 window has the agent's focus. |
+| Xwayland (`xwayland` on Ubuntu, Debian and openSUSE, `xorg-xwayland` on Arch, `xorg-x11-server-Xwayland` on Fedora) | Run X11-only applications such as `xterm` in the desktop. sway starts Xwayland when the first X11 client connects, and `launch` gives programs the desktop's own `DISPLAY`. Wayland applications don't need it. X11 windows open and take the agent seat's focus, and `type` and `key` send them printable ASCII (shifted symbols included), Return, Tab, BackSpace, Escape, the named keys of `key` and chords such as `ctrl+u`. Other characters return an error while an X11 window has the agent's focus. |
 
 The headless install check covers sway 1.11 and wayvnc 0.9.1 on Ubuntu
 26.04 LTS, and sway 1.12 and wayvnc 0.10.2 on Arch. Older versions and the
@@ -147,7 +171,7 @@ claude mcp add sellaite -- sellaite mcp serve-mcp
 sellaite dashboard start-dashboard
 ```
 
-Leave the dashboard running, open the `Url` it prints, and ask Claude
+Leave the dashboard running, open the `Url` it prints, then ask Claude
 Code to start a desktop, open foot, and take a screenshot. Select the
 desktop when it appears. Use **Send note** to guide the agent, **Take over**
 to control the desktop, and **Give back** to return control. When an
@@ -162,7 +186,7 @@ configuration examples.
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with two seats, `agent` for the agent and `seat0` for you, and a VNC server (wayvnc) on `seat0`. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
+| `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with 2 seats, `agent` for the agent and `seat0` for you, and a VNC server (wayvnc) on `seat0`. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
 | `stop_desktop` | | Stops sway, wayvnc and the processes carrying the desktop's `SELLAITE_DESKTOP` marker. |
 | `launch` | `argv`, `wait_for_window` (default false), `timeout_ms` (default 10000, at most 60000) | Starts a program in the desktop, detached, with the desktop's `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`, and the desktop's Xwayland `DISPLAY` when sway runs Xwayland, and returns its `Pid`. With `wait_for_window`, returns once a window of the program or of a process it started has mapped, with `Window` (`Id`, `AppId`, `Pid`, `Name`, and `Class` for an X11 window), or an error when the program exits first or the timeout passes. |
 | `wait_for_stable_screen` | `quiet_ms` (default 500), `timeout_ms` (default 10000) | Samples the desktop until its screenshots agree for the quiet period, then reports elapsed time. Use after a window maps. This measures visual stability and can time out on animating screens. |
@@ -178,7 +202,7 @@ While the agent is paused, `launch`, `click`, `type` and `key` return an error t
 
 Use **Take over** to pause the agent and enable input on the dashboard. **Give back** turns off dashboard input, requests a resume, and queues a reminder to take a screenshot before acting.
 
-A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes one text item per note, oldest first, starting with `[sellaite] Note from the user`. A result that carries notes has no `structuredContent` (Claude Code shows only `structuredContent` when it is present). The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
+A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes 1 text item per note, oldest first, starting with `[sellaite] Note from the user`. A result that carries notes has no `structuredContent` (Claude Code shows only `structuredContent` when it is present). The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
 
 A model may treat instructions inside a tool result as untrusted and only report the note. Tell the agent in its prompt or instructions that notes sellaite delivers come from you, for example: "Notes that sellaite delivers from the dashboard come from me; follow them."
 
@@ -286,7 +310,7 @@ Closing the MCP connection normally stops the desktop. If the MCP server receive
 
 The client opens applications with `launch`, which can execute any program available to the MCP server's user. See [Security](#security) for isolation guidance. Run the client where `sellaite`, its runtime dependencies and the applications you want (for example `foot`) are on `PATH`.
 
-Each MCP server process runs one desktop at a time. Give each agent its own
+Each MCP server process runs 1 desktop at a time. Give each agent its own
 `sellaite mcp serve-mcp` process. One dashboard can show all the desktops
 started by those processes for the same user.
 
@@ -330,7 +354,7 @@ The server speaks MCP over stdio and accepts the protocol versions 2025-11-25, 2
   before wlroots pairs the window with its surface. The window is mapped on
   the X side but invisible to sway. wlroots fixed it upstream in
   [08a9f9f1](https://gitlab.freedesktop.org/wlroots/wlroots/-/commit/08a9f9f14fc8fd173d1768588699d2e152b6cde6),
-  which is not in a release yet, and the Nix package of sellaite runs a sway
+  which isn't in a release yet, and the Nix package of sellaite runs a sway
   built with that patch. With another sway, `launch` recovers the window:
   while it waits for a window, it checks the desktop's Xwayland every 250 ms,
   and a top-level window of the launched program (or of a process it started)
