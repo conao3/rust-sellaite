@@ -3,14 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       version_bump:
-        description: Version bump (none releases the version in Cargo.toml)
+        description: Version bump type
         required: true
         type: choice
         options:
           - patch
           - minor
           - major
-          - none
 permissions:
   contents: read
 concurrency:
@@ -47,7 +46,6 @@ jobs:
             major) version="$((major + 1)).0.0" ;;
             minor) version="$major.$((minor + 1)).0" ;;
             patch) version="$major.$minor.$((patch + 1))" ;;
-            none) version="$current" ;;
           esac
           status=0
           git ls-remote --exit-code origin "refs/tags/v$version" || status=$?
@@ -61,7 +59,6 @@ jobs:
           esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Commit version bump
-        if: ${{ inputs.version_bump != 'none' }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |

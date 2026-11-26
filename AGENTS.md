@@ -170,20 +170,18 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
 ## Releasing
 
 - `.github/workflows/release.yml` (`workflow_dispatch` on `master`, input
-  `version_bump`: `patch`, `minor`, `major` or `none`) is the whole release.
+  `version_bump`: `patch`, `minor` or `major`) is the whole release.
   It refuses an existing tag `v<version>`, commits the bump to `Cargo.toml`
-  and `Cargo.lock` (`none` keeps the version and adds no commit), runs
-  `make check`, `nix build` and `cargo publish --locked --dry-run`, pushes
-  `master` and the annotated tag atomically, dispatches `publish.yml` on the
-  tag and waits for it, and then creates the GitHub Release with
-  `--generate-notes`.
+  and `Cargo.lock`, runs `make check`, `nix build` and
+  `cargo publish --locked --dry-run`, pushes `master` and the annotated tag
+  atomically, dispatches `publish.yml` on the tag and waits for it, and then
+  creates the GitHub Release with `--generate-notes`.
 - crates.io trusts `publish.yml` of this repository (no environment) and
   accepts publishing only that way, so `cargo publish` stays in that file,
   and `release.yml` starts it with `gh workflow run`.
 - When a job after the tag push fails, use "Re-run failed jobs" on the
   release run. `publish.yml` also runs by itself:
   `gh workflow run publish.yml --ref v<version> -f dry_run=false`.
-- Release notes live only in the GitHub Release.
 
 ## Testing headless sway
 

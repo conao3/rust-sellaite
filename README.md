@@ -387,8 +387,7 @@ focus.
 ## Releases
 
 Dispatch the [Release workflow](https://github.com/conao3/rust-sellaite/actions/workflows/release.yml)
-on `master` and choose the version bump, or `none` to release the version in
-`Cargo.toml`:
+on `master` and choose the version bump:
 
 ```sh
 gh workflow run release.yml --ref master -f version_bump=patch
