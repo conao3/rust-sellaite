@@ -170,18 +170,21 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
 ## Releasing
 
 - `.github/workflows/release.yml` (`workflow_dispatch` on `master`, input
-  `version_bump`: `patch`, `minor` or `major`) is the whole release.
-  It refuses an existing tag `v<version>`, commits the bump to `Cargo.toml`
-  and `Cargo.lock`, runs `make check`, `nix build` and
-  `cargo publish --locked --dry-run`, pushes `master` and the annotated tag
-  atomically, dispatches `publish.yml` on the tag and waits for it, and then
-  creates the GitHub Release with `--generate-notes`.
-- crates.io trusts `publish.yml` of this repository (no environment) and
-  accepts publishing only that way, so `cargo publish` stays in that file,
-  and `release.yml` starts it with `gh workflow run`.
+  `version_bump`: `patch`, `minor` or `major`) is the whole release. Its jobs:
+  - `check` (read-only token): refuses an existing tag `v<version>`, commits
+    the bump to `Cargo.toml` and `Cargo.lock` locally, runs `make check`,
+    `nix build` and `cargo publish --locked --dry-run`, and uploads the
+    commit as a git bundle.
+  - `tag` (`contents: write`, runs no build code): checks that the bundled
+    commit is a child of the dispatched commit and changes only
+    `Cargo.toml` and `Cargo.lock`, then pushes `master` and the annotated
+    tag atomically.
+  - `publish` (`id-token: write`): publishes the tag to crates.io through
+    Trusted Publishing. crates.io trusts `release.yml` of this repository
+    (no environment).
+  - `github-release`: creates the GitHub Release with `--generate-notes`.
 - When a job after the tag push fails, use "Re-run failed jobs" on the
-  release run. `publish.yml` also runs by itself:
-  `gh workflow run publish.yml --ref v<version> -f dry_run=false`.
+  release run.
 
 ## Testing headless sway
 
