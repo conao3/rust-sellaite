@@ -172,9 +172,9 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
 - `.github/workflows/release.yml` (`workflow_dispatch` on `master`, input
   `version_bump`: `patch`, `minor` or `major`) is the whole release. Its jobs:
   - `check` (read-only token): refuses an existing tag `v<version>`, commits
-    the bump to `Cargo.toml` and `Cargo.lock` locally, runs `make check`,
-    `nix build` and `cargo publish --locked --dry-run`, and uploads the
-    commit as a git bundle.
+    the bump to `Cargo.toml` and `Cargo.lock` locally, runs
+    `cargo publish --locked --dry-run`, and uploads the commit as a git
+    bundle.
   - `tag` (`contents: write`, runs no build code): checks that the bundled
     commit is a child of the dispatched commit and changes only
     `Cargo.toml` and `Cargo.lock`, then pushes `master` and the annotated
