@@ -10,6 +10,9 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'cachix/install-nix-action@v32.0.0'
         - 'rust-lang/crates-io-auth-action@v1.0.6'
+    '.github/workflows/release.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'cachix/install-nix-action@v32.0.0'
 dependencies:
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'

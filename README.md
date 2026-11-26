@@ -384,6 +384,20 @@ requirements using cargo-deny. The headless sway tests exercise keyboard
 chords through MCP and verify that the agent's input preserves the user seat's
 focus.
 
+## Releases
+
+Dispatch the [Release workflow](https://github.com/conao3/rust-sellaite/actions/workflows/release.yml)
+on `master` and choose the version bump, or `none` to release the version in
+`Cargo.toml`:
+
+```sh
+gh workflow run release.yml --ref master -f version_bump=patch
+```
+
+It runs the checks, pushes the version commit and the `v<version>` tag,
+publishes to crates.io through Trusted Publishing, and creates the GitHub
+Release with generated notes.
+
 ## License
 
 Apache-2.0
