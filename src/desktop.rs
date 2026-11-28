@@ -31,6 +31,7 @@ pub struct Desktop {
     width: u32,
     height: u32,
     input: SeatInput,
+    _user_devices: SeatInput,
     launched: Vec<Child>,
     _cleanup: runtime::Cleanup,
 }
@@ -181,6 +182,13 @@ impl Desktop {
             height,
         )
         .inspect_err(|_| stop_child(&mut sway))?;
+        let user_devices = SeatInput::connect(
+            &runtime_dir.join(&wayland_display),
+            USER_SEAT,
+            width,
+            height,
+        )
+        .inspect_err(|_| stop_child(&mut sway))?;
         let mut desktop = Self {
             runtime_dir,
             sway,
@@ -191,6 +199,7 @@ impl Desktop {
             width,
             height,
             input,
+            _user_devices: user_devices,
             launched: Vec::new(),
             _cleanup: cleanup,
         };

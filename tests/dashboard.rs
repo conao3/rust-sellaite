@@ -223,6 +223,21 @@ fn vnc_client(socket: &Path) -> UnixStream {
     vnc
 }
 
+fn user_seat(swaysock: &str) -> Value {
+    let seats = Command::new("swaymsg")
+        .args(["-r", "-s", swaysock, "-t", "get_seats"])
+        .output()
+        .expect("run swaymsg");
+    let seats: Value = serde_json::from_slice(&seats.stdout).unwrap();
+    seats
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|seat| seat["name"] == "user")
+        .unwrap()
+        .clone()
+}
+
 fn pause_inode(runtime_dir: &Path) -> Option<u64> {
     std::fs::metadata(runtime_dir.join("paused"))
         .ok()
@@ -823,6 +838,14 @@ fn risky_input_waits_for_the_matching_dashboard_decision() {
     ]);
     let desktop = mcp.call("start_desktop", json!({}));
     let id = desktop["structuredContent"]["Id"].as_str().unwrap();
+    let swaysock = desktop["structuredContent"]["Swaysock"].as_str().unwrap();
+    let vnc_socket = PathBuf::from(desktop["structuredContent"]["VncSocket"].as_str().unwrap());
+    assert_eq!(
+        user_seat(swaysock)["capabilities"].as_u64().unwrap() & 1,
+        1,
+        "the user seat has no pointer before a VNC client connects"
+    );
+    let mut viewer = None;
     let dashboard = Dashboard::spawn();
     let origin = dashboard.origin();
     let unresolved = mcp.request(
@@ -874,6 +897,14 @@ fn risky_input_waits_for_the_matching_dashboard_decision() {
         assert_eq!(pending["Target"]["Window"], "Approval fixture");
         assert_eq!(pending["Target"]["Name"], "Sample");
         assert_eq!(pending["Bounds"], element["Bounds"]);
+        if viewer.is_none() {
+            let devices = |seat: Value| seat["devices"].as_array().unwrap().len();
+            let before = devices(user_seat(swaysock));
+            viewer = Some(vnc_client(&vnc_socket));
+            wait_for("the viewer's devices on the user seat", || {
+                (devices(user_seat(swaysock)) >= before + 2).then_some(())
+            });
+        }
         let request_id = pending["Id"].as_str().unwrap();
         assert_eq!(
             dashboard

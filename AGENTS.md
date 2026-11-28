@@ -140,6 +140,13 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   virtual pointer and keyboard of `SeatInput`, and `user`
   (`desktop::USER_SEAT`) is the user's seat. sway runs IPC commands such as
   `focus` on `seat0`, and a new window takes the focus of both seats.
+- `user` also gets a `SeatInput` of its own when the desktop starts, which
+  sends no input. wayvnc adds a pointer and keyboard to its seat for each VNC
+  client and removes them when the client leaves; without the devices of
+  sellaite, the first viewer gives `user` a pointer, sway draws its cursor
+  over the window under it, and an approval pending at that moment is
+  refused with "desktop changed during approval". With them, viewers that
+  connect and leave do not change the screen.
 - Each desktop is a runtime directory `/tmp/sel.<Id>` (`src/runtime.rs`)
   holding sway's sockets, `sellaite.json` (the MCP server's `Pid`, the size and
   `WaylandDisplay`), the wayvnc sockets `vnc.sock` (`--seat user`, for
@@ -273,6 +280,14 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   an empty note and an unknown Id are refused (403, a GraphQL error, and CLI exit codes 252 and 254). It
   fails when a taken note is not removed, when error results get no notes, and
   when `stop_desktop` does not take the notes before the desktop stops.
+- `tests/dashboard.rs` also checks approvals: `click` and `type` with a
+  risky intent wait for the dashboard's approve, edit or reject, and an
+  approval whose target changes is refused with "input target changed
+  during approval". It checks that `user` has a pointer before any VNC
+  client connects, and connects a viewer to `vnc.sock` while the first
+  approval is pending. Without the `SeatInput` of `user`, the viewer's
+  pointer draws a cursor and that approval fails with "desktop changed
+  during approval".
 - `tests/dashboard_access.rs` needs no desktop: it checks that with
   `--public-origins` and `--allowed-logins` a request without an allowed
   `Tailscale-User-Login`, from a foreign `Host` or with a foreign `Origin` gets
