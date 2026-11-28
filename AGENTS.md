@@ -228,7 +228,12 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   the pause error, and the dashboard's Resume and Stop work (and refuse a
   foreign `Origin` or `Host`). It fails when the agent's devices are bound to
   `seat0`, when the watcher is bound to `agent`, and when the pause check is
-  removed. `nix build` runs it too, so `nativeCheckInputs` carries `wayvnc`
+  removed. A resume or Give back requested while `seat0` is active stays
+  queued only while the user's input keeps arriving within the 1 s idle
+  timeout, which a loaded host cannot promise, so the test waits for the
+  watcher to rewrite `paused` (a new inode) after its pointer event, and
+  starts the step again, up to 20 times, when the queued resume ran because
+  `seat0` idled. `nix build` runs it too, so `nativeCheckInputs` carries `wayvnc`
   and the build sets `SELLAITE_NOVNC_DIR`.
 - `tests/dashboard.rs` also checks notes: with two desktops running, notes
   sent through `sellaite desktop create-note` (text and `file://`) and the

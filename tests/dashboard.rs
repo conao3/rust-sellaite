@@ -2,11 +2,11 @@ mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine;
 use serde_json::{Value, json};
@@ -221,6 +221,12 @@ fn vnc_client(socket: &Path) -> UnixStream {
     vnc
 }
 
+fn pause_inode(runtime_dir: &Path) -> Option<u64> {
+    std::fs::metadata(runtime_dir.join("paused"))
+        .ok()
+        .map(|metadata| metadata.ino())
+}
+
 fn pointer_event(vnc: &mut UnixStream, x: u16, y: u16) {
     let mut message = vec![5u8, 0];
     message.extend_from_slice(&x.to_be_bytes());
@@ -288,6 +294,7 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         .clone();
     let id = info["Id"].as_str().unwrap().to_string();
     let vnc_socket = PathBuf::from(info["VncSocket"].as_str().unwrap());
+    let runtime_dir = vnc_socket.parent().unwrap().to_path_buf();
     let dashboard = Dashboard::spawn();
 
     let (status, page) = dashboard.get("/");
@@ -362,28 +369,60 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         403
     );
     assert_eq!(dashboard.desktop(&id).unwrap()["Paused"], true);
-    pointer_event(&mut vnc, 110, 100);
-    assert_eq!(
-        dashboard
-            .control("resumeDesktop", &id, &dashboard.origin())
-            .1["data"]["resumeDesktop"]["id"],
-        id
-    );
-    for x in 111..126 {
-        pointer_event(&mut vnc, x, 100);
-        let desktop = dashboard.desktop(&id).unwrap();
-        assert_eq!(desktop["ResumePending"], true, "{desktop}");
-        assert_eq!(desktop["Paused"], true, "{desktop}");
-        assert_eq!(desktop["UserSeatIdle"], false, "{desktop}");
-        let result = mcp.request(
-            "tools/call",
-            json!({"name": "click", "arguments": {"x": 1, "y": 1}}),
-        );
+    let mut x = 110;
+    let mut attempt = 0;
+    'queued: loop {
+        attempt += 1;
         assert!(
-            is_error(&result),
-            "click ran while the user was active: {result}"
+            attempt <= ATTEMPTS,
+            "a resume requested while seat0 was active never stayed queued"
         );
-        std::thread::sleep(Duration::from_millis(100));
+        wait_for("seat0 to idle", || {
+            dashboard.desktop(&id).filter(|d| d["UserSeatIdle"] == true)
+        });
+        let before = pause_inode(&runtime_dir);
+        x += 1;
+        pointer_event(&mut vnc, x, 100);
+        wait_for("seat0 to pause the agent", || {
+            pause_inode(&runtime_dir).filter(|inode| Some(*inode) != before)
+        });
+        let mut last_input = Instant::now();
+        assert_eq!(
+            dashboard
+                .control("resumeDesktop", &id, &dashboard.origin())
+                .1["data"]["resumeDesktop"]["id"],
+            id
+        );
+        let queued = Instant::now();
+        loop {
+            let click = queued.elapsed() > QUEUED_FOR;
+            let previous_input = last_input;
+            x = 100 + (x + 1) % 600;
+            pointer_event(&mut vnc, x, 100);
+            last_input = Instant::now();
+            let result = click.then(|| {
+                mcp.request(
+                    "tools/call",
+                    json!({"name": "click", "arguments": {"x": 1, "y": 1}}),
+                )
+            });
+            let desktop = dashboard.desktop(&id).unwrap();
+            if desktop["ResumePending"] != true {
+                eprintln!(
+                    "attempt {attempt}: the queued resume ran {} ms after the previous pointer event",
+                    previous_input.elapsed().as_millis()
+                );
+                continue 'queued;
+            }
+            if let Some(result) = result {
+                assert!(
+                    is_error(&result),
+                    "click ran while the user was active: {result}"
+                );
+                break 'queued;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
     let desktop = wait_for("the queued resume after the user seat goes idle", || {
         dashboard.desktop(&id).filter(|d| d["Paused"] == false)
@@ -435,12 +474,12 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     mcp.call("type", json!({"text": "again"}));
     drop(vnc);
 
-    let connection_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut connection_a = "a".repeat(32);
     let connection_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    let mut tab_a = dashboard_vnc(&dashboard, &id, connection_a);
+    let mut tab_a = dashboard_vnc(&dashboard, &id, &connection_a);
     let mut tab_b = dashboard_vnc(&dashboard, &id, connection_b);
 
-    let taken = takeover(&dashboard, &id, "takeOverDesktop", connection_a);
+    let taken = takeover(&dashboard, &id, "takeOverDesktop", &connection_a);
     assert_eq!(
         taken["data"]["takeOverDesktop"]["ownsTakeover"], true,
         "{taken}"
@@ -458,17 +497,45 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     send_vnc(tab_b.get_mut(), &[5, 0, 0, 25, 0, 25]);
     std::thread::sleep(Duration::from_millis(100));
     assert!(idle(), "the spectator's pointer reached seat0");
-    send_vnc(tab_a.get_mut(), &[5, 0, 0, 50, 0, 50]);
-    wait_for("owner pointer", || (!idle()).then_some(()));
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        assert!(
+            attempt <= ATTEMPTS,
+            "a Give back while seat0 was active never queued the resume"
+        );
+        if attempt > 1 {
+            connection_a = format!("{attempt:a>32}");
+            tab_a = dashboard_vnc(&dashboard, &id, &connection_a);
+            let taken = takeover(&dashboard, &id, "takeOverDesktop", &connection_a);
+            assert_eq!(
+                taken["data"]["takeOverDesktop"]["ownsTakeover"], true,
+                "{taken}"
+            );
+        }
+        wait_for("idle user seat", || idle().then_some(()));
+        let before = pause_inode(&runtime_dir);
+        send_vnc(tab_a.get_mut(), &[5, 0, 0, 50 + attempt, 0, 50]);
+        wait_for("the owner's pointer to reach seat0", || {
+            pause_inode(&runtime_dir).filter(|inode| Some(*inode) != before)
+        });
+        let last_input = Instant::now();
 
-    let returned = takeover(&dashboard, &id, "giveBackDesktop", connection_a);
-    assert_eq!(
-        returned["data"]["giveBackDesktop"]["ownsTakeover"], false,
-        "{returned}"
-    );
-    let desktop = dashboard.desktop(&id).unwrap();
-    assert_eq!(desktop["TakingOver"], false, "{desktop}");
-    assert_eq!(desktop["ResumePending"], true, "{desktop}");
+        let returned = takeover(&dashboard, &id, "giveBackDesktop", &connection_a);
+        assert_eq!(
+            returned["data"]["giveBackDesktop"]["ownsTakeover"], false,
+            "{returned}"
+        );
+        let desktop = dashboard.desktop(&id).unwrap();
+        assert_eq!(desktop["TakingOver"], false, "{desktop}");
+        if desktop["ResumePending"] == true {
+            break;
+        }
+        eprintln!(
+            "attempt {attempt}: Give back resumed at once, {} ms after seat0 was seen active",
+            last_input.elapsed().as_millis()
+        );
+    }
     wait_for("idle user seat after Give back", || idle().then_some(()));
     send_vnc(tab_b.get_mut(), &[5, 0, 0, 75, 0, 75]);
     std::thread::sleep(Duration::from_millis(100));
@@ -503,6 +570,10 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         "a stopped desktop is listed"
     );
 }
+
+const ATTEMPTS: u8 = 20;
+
+const QUEUED_FOR: Duration = Duration::from_millis(1500);
 
 const NOTE_MARKER: &str = "[sellaite] Note from the user";
 
