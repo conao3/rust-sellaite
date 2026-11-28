@@ -136,7 +136,7 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
 - Each desktop is a runtime directory `/tmp/sel.<Id>` (`src/runtime.rs`)
   holding sway's sockets, `sellaite.json` (the MCP server's `Pid`, the size and
   `WaylandDisplay`), wayvnc's `vnc.sock`, the files `paused` and
-  `user-idle`, and the `notes` directory. `sellaite dashboard serve` finds desktops by scanning these
+  `user-idle`, and the `notes` directory. `sellaite dashboard start-dashboard` finds desktops by scanning these
   directories, so one dashboard serves every MCP server of the user.
 - `src/idle.rs` binds `ext_idle_notifier_v1` (version 2 uses
   `get_input_idle_notification`) on `seat0` with a 1 second timeout. `idled`
