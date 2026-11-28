@@ -179,6 +179,10 @@ operation asks for approval, review the highlighted target and choose
 **Approve**, **Edit**, or **Reject**. Ask Claude Code to stop the desktop
 when you are done.
 
+![The dashboard showing a running agent desktop with a terminal, next to the list of 2 desktops](images/dashboard.png)
+
+*The dashboard with demo data: a running desktop where the agent used a terminal.*
+
 See [Use with Claude Code / Codex](#use-with-claude-code--codex) for more
 configuration examples.
 
@@ -209,6 +213,10 @@ A model may treat instructions inside a tool result as untrusted and only report
 After `launch` with `wait_for_window`, the agent can type into the new window without clicking first. If the user seat already had focus, sellaite restores it when the new window maps. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and sets `SELLAITE_DESKTOP=<Id>` in the program's environment. Descendants inherit the marker. Processes that discard the environment, for example through `env -i` or `sudo`, can outlive desktop cleanup.
 
 ### Approving sensitive input
+
+![A pending approval in the dashboard: Approve, Edit and Reject buttons above a demo mail window whose Send button is outlined in orange](images/approval.png)
+
+*Captured with demo data: a click with `intent: send` waits for a decision, with its target outlined.*
 
 For `click` and `type`, declare `intent` as `send`, `submit`, `purchase`,
 `password`, or `navigate` for sensitive operations. For navigation, supply
@@ -254,6 +262,10 @@ through a short-lived decision file in the private runtime directory.
   more windows afterwards. Check the displayed windows before sending input.
 
 ## Dashboard
+
+![The dashboard after Take over: the desktop is paused, the Give back button is available and 1 note waits for the agent](images/takeover.png)
+
+*Captured with demo data: the user has taken over, and a note waits for the agent's next tool call.*
 
 ```sh
 sellaite dashboard start-dashboard
