@@ -32,17 +32,16 @@ impl Dashboard {
             .read_line(&mut line)
             .unwrap();
         let url: Value = serde_json::from_str(&line).expect("the dashboard URL");
-        let (address, token) = url["Url"]
+        let (address, query) = url["Url"]
             .as_str()
             .unwrap()
             .trim_start_matches("http://")
-            .split_once("/?token=")
+            .split_once('/')
             .unwrap();
+        let token = query.strip_prefix("?token=").unwrap_or_default();
+        assert_eq!(token.is_empty(), extra.contains(&"--no-token"));
         if extra.contains(&"--public-origins") {
-            assert_eq!(
-                url["PublicUrls"][0],
-                format!("{PUBLIC_ORIGIN}/?token={token}")
-            );
+            assert_eq!(url["PublicUrls"][0], format!("{PUBLIC_ORIGIN}/{query}"));
         }
         Self {
             child,
@@ -206,6 +205,67 @@ fn forged_headers_cannot_reach_dashboard_routes() {
     let health = format!("/health?token={}", dashboard.token);
     assert_eq!(dashboard.status("POST", &bootstrap, &forged), 403);
     assert_eq!(dashboard.status("GET", &health, &forged), 403);
+}
+
+#[test]
+fn no_token_serves_the_allowed_login_without_a_cookie() {
+    let dashboard = Dashboard::spawn(&[
+        "--public-origins",
+        PUBLIC_ORIGIN,
+        "--allowed-logins",
+        LOGIN,
+        "--no-token",
+    ]);
+    let public = ("Host", PUBLIC_HOST);
+    let owner = ("Tailscale-User-Login", LOGIN);
+    let origin = ("Origin", PUBLIC_ORIGIN);
+    let (status, headers) = dashboard.request("GET", "/", &[public, owner]);
+    assert_eq!(status, 200);
+    assert!(!headers.lines().any(|line| line.starts_with("set-cookie:")));
+    assert_eq!(dashboard.status("GET", "/health", &[public, owner]), 204);
+    assert_eq!(dashboard.status("GET", "/", &[public]), 403);
+    assert_eq!(
+        dashboard.status(
+            "GET",
+            "/",
+            &[public, ("Tailscale-User-Login", "someone@example.com")]
+        ),
+        403
+    );
+    assert_eq!(
+        dashboard.status("GET", "/", &[("Host", "evil.example:8731"), owner]),
+        403
+    );
+    assert_eq!(
+        dashboard.status(
+            "POST",
+            "/api/graphql",
+            &[public, owner, ("Origin", "https://evil.example")]
+        ),
+        403
+    );
+    assert_eq!(
+        dashboard.status("POST", "/api/graphql", &[public, owner, origin]),
+        415
+    );
+}
+
+#[test]
+fn no_token_conflicts_with_a_token_file() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sellaite"))
+        .args([
+            "dashboard",
+            "serve",
+            "--novnc-dir",
+            "/nonexistent",
+            "--no-token",
+            "--token-file",
+            "/nonexistent/token",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(252));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
 }
 
 #[test]

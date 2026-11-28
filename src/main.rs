@@ -158,6 +158,10 @@ enum DashboardCommand {
         /// Read or create a private token file to keep the URL valid across restarts
         #[arg(long)]
         token_file: Option<std::path::PathBuf>,
+        /// Serve without the startup token, for a host whose local users and
+        /// processes may all use the dashboard
+        #[arg(long, conflicts_with = "token_file")]
+        no_token: bool,
     },
 }
 
@@ -313,15 +317,17 @@ fn main() {
                     public_origins,
                     allowed_logins,
                     token_file,
+                    no_token,
                 },
         } => {
-            if let Err(e) = dashboard::serve(
-                address,
-                &novnc_dir,
-                &public_origins,
-                allowed_logins,
-                token_file.as_deref(),
-            ) {
+            let token = match token_file {
+                _ if no_token => dashboard::Token::None,
+                Some(path) => dashboard::Token::File(path),
+                None => dashboard::Token::PerStart,
+            };
+            if let Err(e) =
+                dashboard::serve(address, &novnc_dir, &public_origins, allowed_logins, token)
+            {
                 eprintln!("sellaite: {e}");
                 std::process::exit(EXIT_FAILURE);
             }

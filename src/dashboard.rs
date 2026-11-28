@@ -81,7 +81,7 @@ struct Config {
     novnc_dir: PathBuf,
     sites: Vec<Site>,
     allowed_logins: Option<Vec<String>>,
-    token: String,
+    token: Option<String>,
     cookie_name: String,
 }
 
@@ -108,10 +108,6 @@ impl Config {
         }
         Ok(site)
     }
-
-    fn matches_token(&self, value: &str) -> bool {
-        bool::from(self.token.as_bytes().ct_eq(value.as_bytes()))
-    }
 }
 
 pub fn parse_origin(text: &str) -> Result<String, String> {
@@ -127,13 +123,23 @@ pub fn parse_origin(text: &str) -> Result<String, String> {
     Ok(text.to_ascii_lowercase())
 }
 
+pub enum Token {
+    PerStart,
+    File(PathBuf),
+    None,
+}
+
+fn matches_token(token: &str, value: &str) -> bool {
+    bool::from(token.as_bytes().ct_eq(value.as_bytes()))
+}
+
 #[tokio::main]
 pub async fn serve(
     address: SocketAddr,
     novnc_dir: &Path,
     public_origins: &[String],
     allowed_logins: Option<Vec<String>>,
-    token_file: Option<&Path>,
+    token: Token,
 ) -> Result<(), String> {
     let novnc_hint = "install noVNC (Ubuntu package: novnc) and point --novnc-dir or SELLAITE_NOVNC_DIR at the directory containing core/rfb.js";
     let novnc_dir = novnc_dir.canonicalize().map_err(|e| {
@@ -162,12 +168,20 @@ pub async fn serve(
     if !allowed_hosts.contains(&local_host) {
         allowed_hosts.push(local_host);
     }
-    let token = match token_file {
-        Some(path) => persistent_token(path)
-            .map_err(|e| format!("cannot use dashboard token file {}: {e}", path.display()))?,
-        None => generate_token().map_err(|e| format!("cannot generate a dashboard token: {e}"))?,
+    let token = match token {
+        Token::File(path) => Some(
+            persistent_token(&path)
+                .map_err(|e| format!("cannot use dashboard token file {}: {e}", path.display()))?,
+        ),
+        Token::PerStart => {
+            Some(generate_token().map_err(|e| format!("cannot generate a dashboard token: {e}"))?)
+        }
+        Token::None => None,
     };
-    let url = format!("http://{local}/?token={token}");
+    let query = token
+        .as_ref()
+        .map_or(String::new(), |token| format!("?token={token}"));
+    let url = format!("http://{local}/{query}");
     let mut sites: Vec<Site> = allowed_hosts
         .into_iter()
         .map(|host| Site {
@@ -186,7 +200,7 @@ pub async fn serve(
     }));
     let public_urls: Vec<String> = public_origins
         .iter()
-        .map(|o| format!("{o}/?token={token}"))
+        .map(|o| format!("{o}/{query}"))
         .collect();
     println!("{}", json!({"Url": url, "PublicUrls": public_urls}));
     std::io::stdout().flush().map_err(|e| e.to_string())?;
@@ -307,6 +321,9 @@ async fn dashboard_response(config: &Config, request: Request, next: Next) -> Re
         Ok(site) => site,
         Err(message) => return (StatusCode::FORBIDDEN, message).into_response(),
     };
+    let Some(token) = &config.token else {
+        return next.run(request).await;
+    };
     let secure = site.origin.starts_with("https://");
     let cookie_name = if secure {
         format!("__Host-{}", config.cookie_name)
@@ -319,13 +336,10 @@ async fn dashboard_response(config: &Config, request: Request, next: Next) -> Re
             .uri()
             .query()
             .and_then(|query| query.strip_prefix("token="))
-            .is_some_and(|token| config.matches_token(token))
+            .is_some_and(|value| matches_token(token, value))
     {
         let attributes = if secure { "; Secure" } else { "" };
-        let cookie = format!(
-            "{cookie_name}={}; Path=/; HttpOnly; SameSite=Lax{attributes}",
-            config.token
-        );
+        let cookie = format!("{cookie_name}={token}; Path=/; HttpOnly; SameSite=Lax{attributes}");
         let mut response = Redirect::to("/").into_response();
         response
             .headers_mut()
@@ -338,7 +352,7 @@ async fn dashboard_response(config: &Config, request: Request, next: Next) -> Re
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
-        .any(|(name, token)| name == cookie_name && config.matches_token(token));
+        .any(|(name, value)| name == cookie_name && matches_token(token, value));
     if !authenticated {
         return (StatusCode::FORBIDDEN, "open the dashboard's startup URL").into_response();
     }
@@ -542,7 +556,7 @@ mod tests {
                 },
             ],
             allowed_logins,
-            token: String::new(),
+            token: None,
             cookie_name: String::new(),
         }
     }

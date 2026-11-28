@@ -304,6 +304,8 @@ fi
 
 `--public-origins` requires `--allowed-logins`. Every request, including the startup URL, must carry an allowed [`Tailscale-User-Login`](https://tailscale.com/kb/1312/serve#identity-headers) in addition to the dashboard credential. Tailscale Serve derives that header from the requesting machine's tailnet identity. Requests without an allowed login receive 403.
 
+On a host where every local user and process may use the dashboard, pass `--no-token` to serve it without the startup token and the cookie. The dashboard still checks the Host, the allowed login and the Origin, and the plain origin in `PublicUrls` opens it. Any local process can connect to `127.0.0.1:8730` and send an allowed `Tailscale-User-Login`, so use `--no-token` only on a single-user host. `--no-token` cannot be combined with `--token-file`.
+
 Closing the MCP connection normally stops the desktop. If the MCP server receives SIGTERM or SIGKILL, a separate cleanup process stops any remaining marked processes and removes the desktop's runtime directory (`/tmp/sel.*`). If the cleanup process is also killed, the next `sellaite mcp serve-mcp` startup cleans up stale desktops.
 
 ## Use with Claude Code / Codex
