@@ -983,3 +983,84 @@ fn risky_input_waits_for_the_matching_dashboard_decision() {
     }
     mcp.call("stop_desktop", json!({}));
 }
+
+#[test]
+fn a_send_button_in_an_x11_window_waits_for_approval() {
+    let xwayland = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("Xwayland").is_file()));
+    if !xwayland {
+        writeln!(
+            std::io::stderr(),
+            "skipped: Xwayland is not on PATH (add xwayland to the devShell)"
+        )
+        .unwrap();
+        return;
+    }
+    let fixture = tempfile::tempdir().unwrap();
+    let probe = fixture.path().join("timeout");
+    std::fs::write(&probe, "#!/bin/sh\ncat \"$APPROVAL_TEST_TARGET\"\n").unwrap();
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = format!(
+        "{}:{}",
+        fixture.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let target = fixture.path().join("target.json");
+    let element = json!({
+        "Role": "push button", "Name": "Send",
+        "Bounds": {"X": 40, "Y": 40, "Width": 100, "Height": 100},
+    });
+    std::fs::write(&target, element.to_string()).unwrap();
+    let mut mcp = Mcp::spawn_with_env([
+        ("PATH", path.as_str()),
+        ("APPROVAL_TEST_TARGET", target.to_str().unwrap()),
+        ("SELLAITE_ATSPI_LIBRARY", "fixture"),
+    ]);
+    let desktop = mcp.call("start_desktop", json!({}));
+    let id = desktop["structuredContent"]["Id"].as_str().unwrap();
+    let dashboard = Dashboard::spawn();
+    let origin = dashboard.origin();
+    let launched = mcp.call(
+        "launch",
+        json!({
+            "argv": ["xterm", "-T", "X11 approval fixture", "-e", "sh", "-c", "printf '\\033[?25l'; exec sleep 60"],
+            "wait_for_window": true,
+        }),
+    );
+    let window = &launched["structuredContent"]["Window"];
+    assert!(window["AppId"].is_null(), "{launched}");
+    assert_eq!(window["Class"], "XTerm", "{launched}");
+    mcp.call("wait_for_stable_screen", json!({"quiet_ms": 1500}));
+    for (arguments, decision, expected) in [
+        (
+            json!({"x": 42, "y": 50}),
+            json!({"Action": "reject"}),
+            "the user rejected the action",
+        ),
+        (
+            json!({"x": 42, "y": 50, "intent": "send"}),
+            json!({"Action": "approve"}),
+            "clicked at (42, 50)",
+        ),
+    ] {
+        let request = mcp.send_request(
+            "tools/call",
+            json!({"name": "click", "arguments": arguments}),
+        );
+        let pending = wait_for("approval of the X11 Send button", || {
+            let approval = dashboard.desktop(id)?["PendingApproval"].clone();
+            approval.is_object().then_some(approval)
+        });
+        assert_eq!(pending["Tool"], "click");
+        assert_eq!(pending["Target"]["Application"], "XTerm");
+        assert_eq!(pending["Target"]["Window"], "X11 approval fixture");
+        assert_eq!(pending["Target"]["Name"], "Send");
+        assert_eq!(pending["Bounds"], element["Bounds"]);
+        let (_, result) = dashboard.decide(id, pending["Id"].as_str().unwrap(), &origin, &decision);
+        assert_eq!(result["data"]["decideApproval"], true, "{result}");
+        let result = mcp.read_result(request);
+        assert_eq!(result["content"][0]["text"], expected, "{result}");
+        assert!(dashboard.desktop(id).unwrap()["PendingApproval"].is_null());
+    }
+    mcp.call("stop_desktop", json!({}));
+}

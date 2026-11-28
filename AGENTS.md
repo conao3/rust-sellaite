@@ -288,6 +288,15 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   approval is pending. Without the `SeatInput` of `user`, the viewer's
   pointer draws a cursor and that approval fails with "desktop changed
   during approval".
+- `tests/dashboard.rs` also checks approval in an X11 window: it launches
+  `xterm`, whose sway view has no `app_id`, with a stub `timeout` that returns
+  a `push button` named `Send` as the AT-SPI2 target, and checks that an
+  undeclared `click` on it and a `click` with `intent: send` both wait for a
+  dashboard decision whose `Application` is the WM_CLASS class `XTerm`. It
+  fails when `approval::Window` requires `app_id`, because the
+  window is then not found: the undeclared click runs without approval and
+  the declared one returns `approval requires a unique accessible target`. It
+  is skipped only when `Xwayland` is not on `PATH`.
 - `tests/dashboard_access.rs` needs no desktop: it checks that with
   `--public-origins` and `--allowed-logins` a request without an allowed
   `Tailscale-User-Login`, from a foreign `Host` or with a foreign `Origin` gets

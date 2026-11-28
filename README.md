@@ -228,8 +228,9 @@ sellaite looks up the target through AT-SPI2 in the visible window at the
 click point or in the window with the agent seat's keyboard focus. It checks
 password text fields and English button names such as Send, Submit, Buy and
 Pay. A sensitive action requires a unique accessible target with screen bounds
-in a window launched by this desktop. The dashboard displays its application,
-window title, role and name and outlines the element. Some Wayland toolkits
+in a window launched by this desktop. The dashboard displays its application
+(the Wayland app ID, or the WM_CLASS class of an X11 window), window title,
+role and name and outlines the element. Some Wayland toolkits
 report window-relative coordinates or omit coordinates. Automatic detection
 depends on the application's accessibility support and accurate agent
 declarations.

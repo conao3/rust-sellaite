@@ -29,9 +29,28 @@ struct Target {
 struct Window {
     id: u64,
     pid: u32,
-    app_id: String,
-    name: String,
+    app_id: Option<String>,
+    window_properties: Option<WindowProperties>,
+    name: Option<String>,
     rect: Value,
+}
+
+#[derive(Deserialize, PartialEq)]
+struct WindowProperties {
+    class: Option<String>,
+}
+
+impl Window {
+    fn application(&self) -> &str {
+        self.app_id
+            .as_deref()
+            .or_else(|| self.window_properties.as_ref()?.class.as_deref())
+            .unwrap_or_default()
+    }
+
+    fn title(&self) -> &str {
+        self.name.as_deref().unwrap_or_default()
+    }
 }
 
 pub fn pending(dir: &Path) -> Option<Value> {
@@ -119,8 +138,8 @@ pub fn check(
         "Id": id, "Tool": tool, "Reason": reason,
         "Domain": if intent == "navigate" { Some(domain) } else { None },
         "Target": {
-            "Application": target.window.app_id,
-            "Window": target.window.name,
+            "Application": target.window.application(),
+            "Window": target.window.title(),
             "Role": target.element.role,
             "Name": target.element.name,
         },
@@ -231,10 +250,13 @@ fn visible_window(swaysock: &Path, point: Option<(u32, u32)>) -> Result<Option<W
             .zip(focus)
             .is_some_and(|(id, focus)| id == focus),
     });
-    Ok(candidates
+    candidates
         .next()
         .filter(|_| candidates.next().is_none())
-        .and_then(|window| Window::deserialize(window).ok()))
+        .map(|window| {
+            Window::deserialize(window).map_err(|e| format!("cannot read the sway window: {e}"))
+        })
+        .transpose()
 }
 
 fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Option<Target>, String> {
@@ -255,7 +277,7 @@ fn accessibility(desktop: &Desktop, point: Option<(u32, u32)>) -> Result<Option<
             &info.id,
             &coords,
             &window.pid.to_string(),
-            &window.name,
+            window.title(),
             &window.rect.to_string(),
         ])
         .output()
