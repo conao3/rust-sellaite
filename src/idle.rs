@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
+use wayland_client::backend::WaylandError;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
@@ -161,7 +162,10 @@ pub fn watch(socket: &Path, seat_name: &str, runtime_dir: &Path) -> Result<Watch
                 events: libc::POLLIN,
                 revents: 0,
             };
-            if unsafe { libc::poll(&mut fd, 1, POLL_MS) } > 0 && guard.read().is_err() {
+            if unsafe { libc::poll(&mut fd, 1, POLL_MS) } > 0
+                && let Err(error) = guard.read()
+                && !matches!(&error, WaylandError::Io(e) if e.kind() == std::io::ErrorKind::WouldBlock)
+            {
                 break;
             }
         }
