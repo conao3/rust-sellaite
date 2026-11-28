@@ -24,11 +24,17 @@ pub const RESUME_PENDING_REASON: &str = "waiting for your seat to be idle for 1 
 
 const USER_IDLE_FILE: &str = "user-idle";
 
+const AGENT_SEAT_ACTIVE_FILE: &str = "agent-seat-active";
+
+pub const TAKEOVER_REASON: &str = "the user took over the desktop";
+
 const NOTES_DIR: &str = "notes";
 
 pub const MAX_NOTE_CHARS: usize = 2000;
 
 pub const VNC_SOCKET: &str = "vnc.sock";
+
+pub const CONTROL_VNC_SOCKET: &str = "vnc-control.sock";
 
 const STARTING_GRACE: Duration = Duration::from_secs(60);
 
@@ -200,7 +206,27 @@ pub fn taking_over(dir: &Path) -> bool {
 }
 
 pub fn take_over(dir: &Path) -> Result<(), String> {
-    fs::write(dir.join("takeover"), b"").map_err(|e| format!("cannot take over: {e}"))
+    let _lock = lock_pause(dir)?;
+    fs::write(dir.join("takeover"), b"").map_err(|e| format!("cannot take over: {e}"))?;
+    if dir.join(AGENT_SEAT_ACTIVE_FILE).exists() {
+        mark_user_active(dir, TAKEOVER_REASON)?;
+    }
+    Ok(())
+}
+
+pub fn set_agent_seat_active(dir: &Path, active: bool) -> Result<(), String> {
+    let path = dir.join(AGENT_SEAT_ACTIVE_FILE);
+    let result = if active {
+        fs::write(&path, b"")
+    } else {
+        fs::remove_file(&path)
+    };
+    match result {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => {
+            Err(format!("cannot record the agent seat's activity: {e}"))
+        }
+        _ => Ok(()),
+    }
 }
 
 pub fn give_back(dir: &Path) -> Result<(), String> {
@@ -231,6 +257,10 @@ pub fn user_idled(dir: &Path) -> Result<(), String> {
 
 pub fn user_resumed(dir: &Path, reason: &str) -> Result<(), String> {
     let _lock = lock_pause(dir)?;
+    mark_user_active(dir, reason)
+}
+
+fn mark_user_active(dir: &Path, reason: &str) -> Result<(), String> {
     let result = write_pause(dir, reason);
     match fs::remove_file(dir.join(USER_IDLE_FILE)) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => {

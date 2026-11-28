@@ -103,7 +103,7 @@ fn agent_input_stays_on_the_agent_seat() {
     let (id_a, id_b) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
 
     wait_for("both seats to focus termA", || {
-        (sway.seat_focus("seat0") == id_a && sway.seat_focus("agent") == id_a).then_some(())
+        (sway.seat_focus("user") == id_a && sway.seat_focus("seat0") == id_a).then_some(())
     });
 
     let rect = &b["rect"];
@@ -111,10 +111,10 @@ fn agent_input_stays_on_the_agent_seat() {
     let y = rect["y"].as_u64().unwrap() + rect["height"].as_u64().unwrap() / 2;
     mcp.call("click", json!({"x": x, "y": y}));
     wait_for("the agent seat to focus termB", || {
-        (sway.seat_focus("agent") == id_b).then_some(())
+        (sway.seat_focus("seat0") == id_b).then_some(())
     });
     assert_eq!(
-        sway.seat_focus("seat0"),
+        sway.seat_focus("user"),
         id_a,
         "the agent's click moved the user seat"
     );
@@ -127,12 +127,8 @@ fn agent_input_stays_on_the_agent_seat() {
         (std::fs::read_to_string(&log_b).unwrap() == text).then_some(())
     });
 
-    assert_eq!(
-        sway.seat_focus("seat0"),
-        id_a,
-        "the user seat's focus moved"
-    );
-    assert_eq!(sway.seat_focus("agent"), id_b);
+    assert_eq!(sway.seat_focus("user"), id_a, "the user seat's focus moved");
+    assert_eq!(sway.seat_focus("seat0"), id_b);
     assert_eq!(std::fs::read_to_string(&log_a).unwrap(), "");
 
     mcp.call("key", json!({"keys": "ctrl+l"}));
@@ -147,8 +143,8 @@ fn agent_input_stays_on_the_agent_seat() {
         json!({"name": "key", "arguments": {"keys": "hyper+l"}}),
     );
     assert_eq!(unknown["isError"], true, "{unknown}");
-    assert_eq!(sway.seat_focus("seat0"), id_a);
-    assert_eq!(sway.seat_focus("agent"), id_b);
+    assert_eq!(sway.seat_focus("user"), id_a);
+    assert_eq!(sway.seat_focus("seat0"), id_b);
     assert_eq!(std::fs::read_to_string(&log_a).unwrap(), "");
 
     assert!(
@@ -160,7 +156,7 @@ fn agent_input_stays_on_the_agent_seat() {
     let y = rect["y"].as_u64().unwrap() + rect["height"].as_u64().unwrap() / 2;
     mcp.call("click", json!({"x": x, "y": y}));
     wait_for("both seats to focus termA before alt+Tab", || {
-        (sway.seat_focus("agent") == id_a && sway.seat_focus("seat0") == id_a).then_some(())
+        (sway.seat_focus("seat0") == id_a && sway.seat_focus("user") == id_a).then_some(())
     });
     assert_eq!(
         sway.msg(&["bindsym Mod1+Tab focus left"])[0]["success"],
@@ -168,10 +164,10 @@ fn agent_input_stays_on_the_agent_seat() {
     );
     mcp.call("key", json!({"keys": "alt+Tab"}));
     wait_for("alt+Tab to move the agent seat to termB", || {
-        (sway.seat_focus("agent") == id_b).then_some(())
+        (sway.seat_focus("seat0") == id_b).then_some(())
     });
     assert_eq!(
-        sway.seat_focus("seat0"),
+        sway.seat_focus("user"),
         id_a,
         "alt+Tab on the agent seat moved the user seat"
     );

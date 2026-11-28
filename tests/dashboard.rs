@@ -1,4 +1,5 @@
 mod common;
+mod first_seat;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -12,6 +13,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 
 use common::{Mcp, wait_for};
+use first_seat::FirstSeatClient;
 
 struct Dashboard {
     child: Child,
@@ -341,7 +343,7 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         dashboard.desktop(&id).filter(|d| d["Paused"] == true)
     });
     assert!(
-        desktop["PausedReason"].as_str().unwrap().contains("seat0"),
+        desktop["PausedReason"].as_str().unwrap().contains("(user)"),
         "{desktop}"
     );
     for (tool, arguments) in [
@@ -375,15 +377,15 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         attempt += 1;
         assert!(
             attempt <= ATTEMPTS,
-            "a resume requested while seat0 was active never stayed queued"
+            "a resume requested while the user seat was active never stayed queued"
         );
-        wait_for("seat0 to idle", || {
+        wait_for("the user seat to idle", || {
             dashboard.desktop(&id).filter(|d| d["UserSeatIdle"] == true)
         });
         let before = pause_inode(&runtime_dir);
         x += 1;
         pointer_event(&mut vnc, x, 100);
-        wait_for("seat0 to pause the agent", || {
+        wait_for("the user seat to pause the agent", || {
             pause_inode(&runtime_dir).filter(|inode| Some(*inode) != before)
         });
         let mut last_input = Instant::now();
@@ -496,13 +498,13 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
     wait_for("idle user seat", || idle().then_some(()));
     send_vnc(tab_b.get_mut(), &[5, 0, 0, 25, 0, 25]);
     std::thread::sleep(Duration::from_millis(100));
-    assert!(idle(), "the spectator's pointer reached seat0");
+    assert!(idle(), "the spectator's pointer reached a seat");
     let mut attempt = 0;
     loop {
         attempt += 1;
         assert!(
             attempt <= ATTEMPTS,
-            "a Give back while seat0 was active never queued the resume"
+            "a Give back while the owner's input was recent never queued the resume"
         );
         if attempt > 1 {
             connection_a = format!("{attempt:a>32}");
@@ -516,7 +518,7 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         wait_for("idle user seat", || idle().then_some(()));
         let before = pause_inode(&runtime_dir);
         send_vnc(tab_a.get_mut(), &[5, 0, 0, 50 + attempt, 0, 50]);
-        wait_for("the owner's pointer to reach seat0", || {
+        wait_for("the owner's pointer to reach the agent seat", || {
             pause_inode(&runtime_dir).filter(|inode| Some(*inode) != before)
         });
         let last_input = Instant::now();
@@ -532,14 +534,14 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
             break;
         }
         eprintln!(
-            "attempt {attempt}: Give back resumed at once, {} ms after seat0 was seen active",
+            "attempt {attempt}: Give back resumed at once, {} ms after the agent seat was seen active",
             last_input.elapsed().as_millis()
         );
     }
     wait_for("idle user seat after Give back", || idle().then_some(()));
     send_vnc(tab_b.get_mut(), &[5, 0, 0, 75, 0, 75]);
     std::thread::sleep(Duration::from_millis(100));
-    assert!(idle(), "a pointer reached seat0 after Give back");
+    assert!(idle(), "a pointer reached a seat after Give back");
     drop(tab_a);
     let result = mcp.request("tools/call", json!({"name": "screenshot", "arguments": {}}));
     assert!(
@@ -569,6 +571,100 @@ fn the_user_seat_pauses_the_agent_and_the_dashboard_resumes_it() {
         dashboard.desktop(&id).is_none(),
         "a stopped desktop is listed"
     );
+}
+
+#[test]
+fn a_client_that_binds_only_the_first_seat_gets_the_agent_and_the_take_over_input() {
+    let mut mcp = Mcp::spawn();
+    let info = mcp.call("start_desktop", json!({"width": 800, "height": 600}))["structuredContent"]
+        .clone();
+    let id = info["Id"].as_str().unwrap().to_string();
+    let runtime_dir = PathBuf::from(info["XdgRuntimeDir"].as_str().unwrap());
+    let swaysock = info["Swaysock"].as_str().unwrap().to_string();
+    let client =
+        FirstSeatClient::connect(&runtime_dir.join(info["WaylandDisplay"].as_str().unwrap()));
+    assert_eq!(client.seat().as_deref(), Some("seat0"));
+    wait_for("the client's window to fill the output", || {
+        let tree = Command::new("swaymsg")
+            .args(["-r", "-s", &swaysock, "-t", "get_tree"])
+            .output()
+            .expect("run swaymsg");
+        let tree: Value = serde_json::from_slice(&tree.stdout).ok()?;
+        let width = view_width(&tree, first_seat::APP_ID)?;
+        (width > 400).then_some(())
+    });
+
+    wait_for("the agent's click to reach the client", || {
+        if client.buttons() > 0 {
+            return Some(());
+        }
+        mcp.call("click", json!({"x": 400, "y": 300}));
+        std::thread::sleep(Duration::from_millis(200));
+        None
+    });
+    let clicks = client.buttons();
+    mcp.call("type", json!({"text": "ab"}));
+    wait_for("the agent's keys to reach the client", || {
+        (client.keys() == 2).then_some(())
+    });
+
+    let dashboard = Dashboard::spawn();
+    let owner = "c".repeat(32);
+    let spectator = "d".repeat(32);
+    let mut tab_owner = dashboard_vnc(&dashboard, &id, &owner);
+    let mut tab_spectator = dashboard_vnc(&dashboard, &id, &spectator);
+    let taken = takeover(&dashboard, &id, "takeOverDesktop", &owner);
+    assert_eq!(
+        taken["data"]["takeOverDesktop"]["ownsTakeover"], true,
+        "{taken}"
+    );
+    send_vnc(tab_spectator.get_mut(), &[5, 1, 1, 144, 1, 44]);
+    send_vnc(tab_spectator.get_mut(), &[5, 0, 1, 144, 1, 44]);
+    send_vnc(tab_owner.get_mut(), &[5, 1, 1, 144, 1, 44]);
+    send_vnc(tab_owner.get_mut(), &[5, 0, 1, 144, 1, 44]);
+    wait_for("the owner's click to reach the client", || {
+        (client.buttons() == clicks + 1).then_some(())
+    });
+    send_vnc(tab_owner.get_mut(), &[4, 1, 0, 0, 0, 0, 0, 0x61]);
+    send_vnc(tab_owner.get_mut(), &[4, 0, 0, 0, 0, 0, 0, 0x61]);
+    wait_for("the owner's key to reach the client", || {
+        (client.keys() == 3).then_some(())
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        client.buttons(),
+        clicks + 1,
+        "the spectator's click reached the client"
+    );
+
+    let returned = takeover(&dashboard, &id, "giveBackDesktop", &owner);
+    assert_eq!(
+        returned["data"]["giveBackDesktop"]["ownsTakeover"], false,
+        "{returned}"
+    );
+    wait_for("the agent to resume after Give back", || {
+        dashboard.desktop(&id).filter(|d| d["Paused"] == false)
+    });
+    mcp.call("click", json!({"x": 400, "y": 300}));
+    wait_for(
+        "the agent's click after Give back to reach the client",
+        || (client.buttons() == clicks + 2).then_some(()),
+    );
+    drop(tab_owner);
+    drop(tab_spectator);
+    drop(client);
+    mcp.call("stop_desktop", json!({}));
+}
+
+fn view_width(node: &Value, app_id: &str) -> Option<u64> {
+    if node["app_id"] == app_id {
+        return node["rect"]["width"].as_u64();
+    }
+    ["nodes", "floating_nodes"]
+        .iter()
+        .filter_map(|key| node[key].as_array())
+        .flatten()
+        .find_map(|child| view_width(child, app_id))
 }
 
 const ATTEMPTS: u8 = 20;

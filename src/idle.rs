@@ -35,10 +35,18 @@ impl Drop for Watcher {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seat {
+    User,
+    Agent,
+}
+
 struct State {
     seats: Vec<(WlSeat, Option<String>)>,
     runtime_dir: PathBuf,
-    seat_name: String,
+    user_seat: String,
+    user_active: bool,
+    agent_active: bool,
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for State {
@@ -82,28 +90,51 @@ impl Dispatch<ExtIdleNotifierV1, ()> for State {
     }
 }
 
-impl Dispatch<ExtIdleNotificationV1, ()> for State {
+impl Dispatch<ExtIdleNotificationV1, Seat> for State {
     fn event(
         state: &mut Self,
         _: &ExtIdleNotificationV1,
         event: ext_idle_notification_v1::Event,
-        _: &(),
+        seat: &Seat,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        state.handle_idle_event(event);
+        state.handle_idle_event(*seat, event);
     }
 }
 
 impl State {
-    fn handle_idle_event(&self, event: ext_idle_notification_v1::Event) {
-        let result = match event {
-            ext_idle_notification_v1::Event::Idled => runtime::user_idled(&self.runtime_dir),
-            ext_idle_notification_v1::Event::Resumed => {
-                let reason = format!("the user used their own seat ({})", self.seat_name);
+    fn handle_idle_event(&mut self, seat: Seat, event: ext_idle_notification_v1::Event) {
+        let active = match event {
+            ext_idle_notification_v1::Event::Idled => false,
+            ext_idle_notification_v1::Event::Resumed => true,
+            _ => return,
+        };
+        match seat {
+            Seat::User => self.user_active = active,
+            Seat::Agent => {
+                self.agent_active = active;
+                if let Err(e) = runtime::set_agent_seat_active(&self.runtime_dir, active) {
+                    eprintln!("sellaite: {e}");
+                }
+            }
+        }
+        let result = match (seat, active) {
+            (Seat::User, true) => {
+                let reason = format!("the user used their own seat ({})", self.user_seat);
                 runtime::user_resumed(&self.runtime_dir, &reason)
             }
-            _ => return,
+            (Seat::Agent, true) if runtime::taking_over(&self.runtime_dir) => {
+                runtime::user_resumed(&self.runtime_dir, runtime::TAKEOVER_REASON)
+            }
+            (Seat::Agent, true) => return,
+            (_, false)
+                if self.user_active
+                    || (self.agent_active && runtime::taking_over(&self.runtime_dir)) =>
+            {
+                return;
+            }
+            (_, false) => runtime::user_idled(&self.runtime_dir),
         };
         if let Err(e) = result {
             eprintln!("sellaite: {e}");
@@ -111,7 +142,12 @@ impl State {
     }
 }
 
-pub fn watch(socket: &Path, seat_name: &str, runtime_dir: &Path) -> Result<Watcher, String> {
+pub fn watch(
+    socket: &Path,
+    user_seat: &str,
+    agent_seat: &str,
+    runtime_dir: &Path,
+) -> Result<Watcher, String> {
     let stream = UnixStream::connect(socket)
         .map_err(|e| format!("cannot connect to {}: {e}", socket.display()))?;
     let conn = Connection::from_socket(stream).map_err(|e| e.to_string())?;
@@ -120,7 +156,9 @@ pub fn watch(socket: &Path, seat_name: &str, runtime_dir: &Path) -> Result<Watch
     let mut state = State {
         seats: Vec::new(),
         runtime_dir: runtime_dir.to_path_buf(),
-        seat_name: seat_name.to_string(),
+        user_seat: user_seat.to_string(),
+        user_active: false,
+        agent_active: false,
     };
     for global in globals.contents().clone_list() {
         if global.interface == "wl_seat" {
@@ -131,25 +169,28 @@ pub fn watch(socket: &Path, seat_name: &str, runtime_dir: &Path) -> Result<Watch
         }
     }
     queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
-    let seat = state
-        .seats
-        .iter()
-        .find(|(_, name)| name.as_deref() == Some(seat_name))
-        .map(|(seat, _)| seat.clone())
-        .ok_or_else(|| format!("the compositor has no seat named {seat_name:?}"))?;
     let notifier: ExtIdleNotifierV1 = globals
         .bind(&qh, 1..=2, ())
         .map_err(|e| format!("ext_idle_notifier_v1: {e}"))?;
-    let notification = if notifier.version() >= 2 {
-        notifier.get_input_idle_notification(TIMEOUT_MS, &seat, &qh, ())
-    } else {
-        notifier.get_idle_notification(TIMEOUT_MS, &seat, &qh, ())
-    };
+    let mut notifications = Vec::new();
+    for (role, name) in [(Seat::User, user_seat), (Seat::Agent, agent_seat)] {
+        let seat = state
+            .seats
+            .iter()
+            .find(|(_, seat_name)| seat_name.as_deref() == Some(name))
+            .map(|(seat, _)| seat.clone())
+            .ok_or_else(|| format!("the compositor has no seat named {name:?}"))?;
+        notifications.push(if notifier.version() >= 2 {
+            notifier.get_input_idle_notification(TIMEOUT_MS, &seat, &qh, role)
+        } else {
+            notifier.get_idle_notification(TIMEOUT_MS, &seat, &qh, role)
+        });
+    }
     queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = Arc::clone(&stop);
     let thread = std::thread::spawn(move || {
-        let _notification = notification;
+        let _notifications = notifications;
         while !stopping.load(Ordering::Relaxed) {
             if queue.dispatch_pending(&mut state).is_err() || queue.flush().is_err() {
                 break;
@@ -187,24 +228,81 @@ mod tests {
     use super::*;
     use ext_idle_notification_v1::Event;
 
+    fn state(dir: &Path) -> State {
+        State {
+            seats: Vec::new(),
+            runtime_dir: dir.to_path_buf(),
+            user_seat: "user".into(),
+            user_active: false,
+            agent_active: false,
+        }
+    }
+
     #[test]
     fn idle_then_resume_updates_the_marker_and_pauses() {
         let dir = tempfile::tempdir().unwrap();
-        let state = State {
-            seats: Vec::new(),
-            runtime_dir: dir.path().to_path_buf(),
-            seat_name: "seat0".into(),
-        };
+        let mut state = state(dir.path());
 
-        state.handle_idle_event(Event::Idled);
+        state.handle_idle_event(Seat::User, Event::Idled);
         assert!(runtime::user_idle(dir.path()));
         assert_eq!(runtime::paused(dir.path()), None);
 
-        state.handle_idle_event(Event::Resumed);
+        state.handle_idle_event(Seat::User, Event::Resumed);
         assert!(!runtime::user_idle(dir.path()));
         assert_eq!(
             runtime::paused(dir.path()).as_deref(),
-            Some("the user used their own seat (seat0)")
+            Some("the user used their own seat (user)")
+        );
+    }
+
+    #[test]
+    fn the_agent_seat_counts_as_the_user_only_while_taking_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state(dir.path());
+        state.handle_idle_event(Seat::User, Event::Idled);
+
+        state.handle_idle_event(Seat::Agent, Event::Resumed);
+        assert!(runtime::user_idle(dir.path()));
+        assert_eq!(runtime::paused(dir.path()), None);
+        state.handle_idle_event(Seat::Agent, Event::Idled);
+        assert!(runtime::user_idle(dir.path()));
+
+        runtime::take_over(dir.path()).unwrap();
+        state.handle_idle_event(Seat::Agent, Event::Resumed);
+        assert!(!runtime::user_idle(dir.path()));
+        state.handle_idle_event(Seat::User, Event::Resumed);
+        state.handle_idle_event(Seat::User, Event::Idled);
+        assert!(
+            !runtime::user_idle(dir.path()),
+            "the user seat idled while the user still used the agent seat"
+        );
+        runtime::give_back(dir.path()).unwrap();
+        assert_eq!(
+            runtime::paused(dir.path()).as_deref(),
+            Some(runtime::RESUME_PENDING_REASON)
+        );
+        state.handle_idle_event(Seat::Agent, Event::Idled);
+        assert!(runtime::user_idle(dir.path()));
+        assert_eq!(runtime::paused(dir.path()), None);
+    }
+
+    #[test]
+    fn taking_over_an_active_agent_seat_marks_the_user_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state(dir.path());
+        state.handle_idle_event(Seat::User, Event::Idled);
+        state.handle_idle_event(Seat::Agent, Event::Resumed);
+        assert!(runtime::user_idle(dir.path()));
+
+        runtime::take_over(dir.path()).unwrap();
+        assert!(!runtime::user_idle(dir.path()));
+        state.handle_idle_event(Seat::Agent, Event::Idled);
+        assert!(runtime::user_idle(dir.path()));
+        runtime::give_back(dir.path()).unwrap();
+        runtime::take_over(dir.path()).unwrap();
+        assert!(
+            runtime::user_idle(dir.path()),
+            "a Take over of an idle agent seat marked the user active"
         );
     }
 }

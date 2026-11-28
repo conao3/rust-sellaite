@@ -108,7 +108,7 @@ fn launch_opens_a_focused_window_and_stop_desktop_ends_every_launched_process() 
         assert!(environment.contains(&entry.as_bytes()), "missing {entry}");
     }
     assert_eq!(
-        seat_focus(&swaysock, "agent"),
+        seat_focus(&swaysock, "seat0"),
         window["Id"].as_i64().unwrap(),
         "the launched window does not have the agent seat's focus"
     );
@@ -150,14 +150,12 @@ fn launch_opens_a_focused_window_and_stop_desktop_ends_every_launched_process() 
     let message = error_text(&mut mcp, "launch", json!({"argv": []}));
     assert!(message.contains("argv"), "{message}");
 
-    let user_focus = seat_focus(&swaysock, "seat0");
     let second = mcp.call(
         "launch",
         json!({"argv": ["foot", "--app-id", "second", "sh"], "wait_for_window": true}),
     );
-    assert_eq!(seat_focus(&swaysock, "seat0"), user_focus);
     assert_eq!(
-        seat_focus(&swaysock, "agent"),
+        seat_focus(&swaysock, "seat0"),
         second["structuredContent"]["Window"]["Id"]
             .as_i64()
             .unwrap()
@@ -333,7 +331,7 @@ fn launch_opens_an_x11_window_through_the_desktops_xwayland() {
     assert_eq!(window["Class"], "XTerm", "{launched}");
     assert_eq!(window["Pid"], xterm, "{launched}");
     assert_eq!(
-        seat_focus(&swaysock, "agent"),
+        seat_focus(&swaysock, "seat0"),
         window["Id"].as_i64().unwrap(),
         "the X11 window does not have the agent seat's focus"
     );

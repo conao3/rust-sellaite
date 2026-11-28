@@ -20,6 +20,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::json;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
@@ -444,6 +445,8 @@ async fn vnc(
         let mut buffer = vec![0; 64 * 1024];
         let mut pending = Vec::new();
         let mut handshake = 0;
+        let mut encodings = Vec::new();
+        let mut controller: Option<(OwnedWriteHalf, tokio::task::JoinHandle<()>)> = None;
         'proxy: loop {
             tokio::select! {
                 _ = close.notified() => break,
@@ -463,8 +466,28 @@ async fn vnc(
                                 if control.connections[&connection].2 {
                                     break 'proxy;
                                 }
-                                if (!input || control.owns(&id, &connection))
-                                    && !matches!(tokio::time::timeout(Duration::from_secs(2), outgoing.write_all(&remaining[..size])).await, Ok(Ok(())))
+                                let message = &remaining[..size];
+                                if handshake == 3 && message[0] == 2 {
+                                    encodings = message.to_vec();
+                                }
+                                let target = if !input {
+                                    Some(&mut outgoing)
+                                } else if control.owns(&id, &connection) {
+                                    if controller.is_none() {
+                                        match control_vnc(&dir, &encodings).await {
+                                            Ok(connected) => controller = Some(connected),
+                                            Err(error) => {
+                                                eprintln!("sellaite: cannot open the control VNC connection: {error}");
+                                                break 'proxy;
+                                            }
+                                        }
+                                    }
+                                    controller.as_mut().map(|(writer, _)| writer)
+                                } else {
+                                    None
+                                };
+                                if let Some(target) = target
+                                    && !matches!(tokio::time::timeout(Duration::from_secs(2), target.write_all(message)).await, Ok(Ok(())))
                                 {
                                     break 'proxy;
                                 }
@@ -488,6 +511,10 @@ async fn vnc(
         }
         drop(outgoing);
         drop(incoming);
+        if let Some((writer, drain)) = controller {
+            drop(writer);
+            drain.abort();
+        }
         let mut control = config.control.lock().await;
         if control.owns(&id, &connection)
             && let Err(error) = control.release(&id, &dir, &connection)
@@ -496,6 +523,51 @@ async fn vnc(
         }
         control.connections.remove(&connection);
     }))
+}
+
+async fn control_vnc(
+    dir: &Path,
+    encodings: &[u8],
+) -> io::Result<(OwnedWriteHalf, tokio::task::JoinHandle<()>)> {
+    let handshake = async {
+        let mut vnc = UnixStream::connect(dir.join(runtime::CONTROL_VNC_SOCKET)).await?;
+        let mut version = [0u8; 12];
+        vnc.read_exact(&mut version).await?;
+        vnc.write_all(b"RFB 003.008\n").await?;
+        let mut count = [0u8; 1];
+        vnc.read_exact(&mut count).await?;
+        let mut types = vec![0u8; usize::from(count[0])];
+        vnc.read_exact(&mut types).await?;
+        if !types.contains(&1) {
+            return Err(io::Error::other("wayvnc offers no security type None"));
+        }
+        vnc.write_all(&[1]).await?;
+        let mut result = [0u8; 4];
+        vnc.read_exact(&mut result).await?;
+        if result != [0; 4] {
+            return Err(io::Error::other("wayvnc refused the security handshake"));
+        }
+        vnc.write_all(&[1]).await?;
+        let mut init = [0u8; 24];
+        vnc.read_exact(&mut init).await?;
+        let name = u32::from_be_bytes(init[20..24].try_into().unwrap());
+        if name > 1 << 16 {
+            return Err(io::Error::other("wayvnc sent an oversized desktop name"));
+        }
+        let mut name = vec![0u8; name as usize];
+        vnc.read_exact(&mut name).await?;
+        vnc.write_all(encodings).await?;
+        Ok(vnc)
+    };
+    let vnc = tokio::time::timeout(Duration::from_secs(2), handshake)
+        .await
+        .map_err(|_| io::Error::other("the control VNC handshake timed out"))??;
+    let (mut reader, writer) = vnc.into_split();
+    let drain = tokio::spawn(async move {
+        let mut buffer = vec![0; 16 * 1024];
+        while matches!(reader.read(&mut buffer).await, Ok(size) if size > 0) {}
+    });
+    Ok((writer, drain))
 }
 
 fn client_message(bytes: &[u8], handshake: u8) -> Result<Option<(usize, bool)>, ()> {

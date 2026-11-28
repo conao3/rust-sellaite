@@ -11,9 +11,9 @@ use crate::keymap;
 use crate::launch::{self, WindowEvents};
 use crate::runtime;
 
-pub const AGENT_SEAT: &str = "agent";
+pub const AGENT_SEAT: &str = "seat0";
 
-pub const USER_SEAT: &str = "seat0";
+pub const USER_SEAT: &str = "user";
 
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -24,7 +24,7 @@ const LAUNCH_LOG: &str = "launch.log";
 pub struct Desktop {
     runtime_dir: PathBuf,
     sway: Child,
-    wayvnc: Option<Child>,
+    wayvnc: Vec<Child>,
     watcher: Option<idle::Watcher>,
     wayland_display: String,
     swaysock: PathBuf,
@@ -56,8 +56,8 @@ fn sway_config(width: u32, height: u32) -> String {
         "output HEADLESS-1 resolution {width}x{height} position 0 0\n\
          default_orientation horizontal\n\
          focus_follows_mouse no\n\
-         seat {USER_SEAT} fallback true\n\
-         seat {AGENT_SEAT} fallback false\n"
+         seat {AGENT_SEAT} fallback false\n\
+         seat {USER_SEAT} fallback true\n"
     )
 }
 
@@ -184,7 +184,7 @@ impl Desktop {
         let mut desktop = Self {
             runtime_dir,
             sway,
-            wayvnc: None,
+            wayvnc: Vec::new(),
             watcher: None,
             wayland_display,
             swaysock,
@@ -206,16 +206,33 @@ impl Desktop {
         self.watcher = Some(idle::watch(
             &self.runtime_dir.join(&self.wayland_display),
             USER_SEAT,
+            AGENT_SEAT,
             &self.runtime_dir,
         )?);
-        let vnc_socket = self.runtime_dir.join(runtime::VNC_SOCKET);
-        let log_path = self.runtime_dir.join("wayvnc.log");
+        self.start_wayvnc(USER_SEAT, runtime::VNC_SOCKET, "wayvncctl", "wayvnc.log")?;
+        self.start_wayvnc(
+            AGENT_SEAT,
+            runtime::CONTROL_VNC_SOCKET,
+            "wayvncctl-control",
+            "wayvnc-control.log",
+        )
+    }
+
+    fn start_wayvnc(
+        &mut self,
+        seat: &str,
+        socket: &str,
+        ctl: &str,
+        log: &str,
+    ) -> Result<(), String> {
+        let vnc_socket = self.runtime_dir.join(socket);
+        let log_path = self.runtime_dir.join(log);
         let log = fs::File::create(&log_path).map_err(|e| e.to_string())?;
         let mut command = Command::new("wayvnc");
         command
-            .args(["--unix-socket", "--seat", USER_SEAT])
+            .args(["--unix-socket", "--seat", seat])
             .arg("--socket")
-            .arg(self.runtime_dir.join("wayvncctl"))
+            .arg(self.runtime_dir.join(ctl))
             .arg(&vnc_socket)
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
             .env("WAYLAND_DISPLAY", &self.wayland_display)
@@ -223,9 +240,9 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
-        let wayvnc = self
-            .wayvnc
-            .insert(spawn_child(&mut command, "wayvnc (package: wayvnc)")?);
+        self.wayvnc
+            .push(spawn_child(&mut command, "wayvnc (package: wayvnc)")?);
+        let wayvnc = self.wayvnc.last_mut().unwrap();
         let deadline = Instant::now() + START_TIMEOUT;
         while !vnc_socket.exists() {
             if let Ok(Some(status)) = wayvnc.try_wait() {
@@ -309,7 +326,6 @@ impl Desktop {
         self.launched
             .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
         let mut events = WindowEvents::subscribe(&self.swaysock)?;
-        let user_focus = launch::user_focus(&self.swaysock)?;
         let log_path = self.runtime_dir.join(LAUNCH_LOG);
         let log = fs::OpenOptions::new()
             .create(true)
@@ -395,7 +411,6 @@ impl Desktop {
                         remapper.poll(pid);
                     }
                     if let Some(window) = events.new_window_of(pid, deadline)? {
-                        launch::restore_user_focus(&self.swaysock, user_focus, &window)?;
                         break Some(window);
                     }
                     if let Ok(Some(status)) = child.try_wait() {
@@ -413,25 +428,13 @@ impl Desktop {
                 }
             }
             None => {
-                if user_focus.is_some() || remapper.is_some() {
-                    let swaysock = self.swaysock.clone();
+                if let Some(mut remapper) = remapper {
                     std::thread::spawn(move || {
                         let deadline = Instant::now() + Duration::from_secs(60);
                         while Instant::now() < deadline && launch::running(pid) {
-                            if let Some(remapper) = &mut remapper {
-                                remapper.poll(pid);
-                            }
-                            match events.new_window_of(pid, deadline) {
-                                Ok(Some(window)) => {
-                                    if let Err(e) =
-                                        launch::restore_user_focus(&swaysock, user_focus, &window)
-                                    {
-                                        eprintln!("sellaite: {e}");
-                                    }
-                                    break;
-                                }
-                                Ok(None) => {}
-                                Err(_) => break,
+                            remapper.poll(pid);
+                            if !matches!(events.new_window_of(pid, deadline), Ok(None)) {
+                                break;
                             }
                         }
                     });
@@ -495,7 +498,7 @@ impl Drop for Desktop {
     fn drop(&mut self) {
         self.stop_launched();
         self.watcher = None;
-        if let Some(wayvnc) = self.wayvnc.as_mut() {
+        for wayvnc in &mut self.wayvnc {
             stop_child(wayvnc);
         }
         stop_child(&mut self.sway);

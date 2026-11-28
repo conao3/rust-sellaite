@@ -313,10 +313,6 @@ fn xwayland_windows(node: &Value) -> Vec<u32> {
     windows
 }
 
-pub fn user_focus(swaysock: &Path) -> Result<Option<u64>, String> {
-    seat_focus(swaysock, crate::desktop::USER_SEAT)
-}
-
 pub fn seat_focus(swaysock: &Path, name: &str) -> Result<Option<u64>, String> {
     let seats = swaymsg(swaysock, &["-t", "get_seats"])?;
     Ok(seats
@@ -343,22 +339,6 @@ fn find_node(node: &Value, id: u64) -> Option<&Value> {
         .filter_map(|key| node[key].as_array())
         .flatten()
         .find_map(|child| find_node(child, id))
-}
-
-pub fn restore_user_focus(
-    swaysock: &Path,
-    previous: Option<u64>,
-    window: &Value,
-) -> Result<(), String> {
-    if let Some(previous) = previous
-        && user_focus(swaysock)? == window["id"].as_u64()
-        && Some(previous) != window["id"].as_u64()
-        && let Err(error) = swaymsg(swaysock, &[&format!("[con_id={previous}] focus")])
-        && !error.contains("No matching node.")
-    {
-        return Err(error);
-    }
-    Ok(())
 }
 
 pub fn swaymsg(swaysock: &Path, args: &[&str]) -> Result<Value, String> {

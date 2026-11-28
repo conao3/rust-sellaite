@@ -35,7 +35,7 @@ user's cursor or focus. See `README.md` for the goal.
   whose `/tmp/.X<n>-lock` holds sway's PID), the X11 client of
   `launch::Remapper` (x11rb), the Wayland protocol clients
   (virtual pointer and keyboard, screen capture, the ext-idle-notify-v1 watcher
-  of `seat0`), the MCP server, the dashboard (HTTP, the WebSocket proxy to
+  of both seats), the MCP server, the dashboard (HTTP, the WebSocket proxy to
   wayvnc), and the CLI (`clap`).
 - Pause state lives in the desktop's runtime directory. MCP input tools refuse
   while `paused` exists or the user has taken over. `src/runtime.rs` serializes
@@ -133,16 +133,29 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
 
 ## Desktops, the dashboard and pause
 
+- Each desktop has 2 seats. sway always creates `seat0` first and advertises
+  it as the first `wl_seat`, and Chromium on Wayland binds only the first
+  `wl_seat` (`WaylandSeat::Instantiate` returns once `connection->seat_` is
+  set), so `seat0` is the agent seat (`desktop::AGENT_SEAT`), which gets the
+  virtual pointer and keyboard of `SeatInput`, and `user`
+  (`desktop::USER_SEAT`) is the user's seat. sway runs IPC commands such as
+  `focus` on `seat0`, and a new window takes the focus of both seats.
 - Each desktop is a runtime directory `/tmp/sel.<Id>` (`src/runtime.rs`)
   holding sway's sockets, `sellaite.json` (the MCP server's `Pid`, the size and
-  `WaylandDisplay`), wayvnc's `vnc.sock`, the files `paused` and
-  `user-idle`, and the `notes` directory. `sellaite dashboard start-dashboard` finds desktops by scanning these
+  `WaylandDisplay`), the wayvnc sockets `vnc.sock` (`--seat user`, for
+  watching and for VNC clients whose input pauses the agent) and
+  `vnc-control.sock` (`--seat seat0`, for Take over), the files `paused`,
+  `user-idle` and `agent-seat-active`, and the `notes` directory. `sellaite dashboard start-dashboard` finds desktops by scanning these
   directories, so one dashboard serves every MCP server of the user.
 - `src/idle.rs` binds `ext_idle_notifier_v1` (version 2 uses
-  `get_input_idle_notification`) on `seat0` with a 1 second timeout. `idled`
-  writes `user-idle` and completes a pending resume. `resumed` writes `paused`
-  and clears `user-idle`. Resume and Give back wait for idle when the seat is
-  active. Stop cancels a pending resume.
+  `get_input_idle_notification`) on both seats with a 1 second timeout.
+  `resumed` on `user`, and on `seat0` while `takeover` exists, writes `paused`
+  and clears `user-idle`; so does a Take over (`runtime::take_over`) while
+  `agent-seat-active`, which the watcher keeps while `seat0` is active,
+  exists. `idled` on either seat writes
+  `user-idle` and completes a pending resume, unless `user` is active or
+  `seat0` is active during a Take over. Resume and Give back wait for idle
+  when the user is active. Stop cancels a pending resume.
 - `runtime::remove_stale` (run when `mcp serve` starts) removes a directory
   whose `sellaite.json` names a dead process, or that has no `sellaite.json`,
   is older than 60 s and has no Wayland socket that accepts a connection.
@@ -151,6 +164,12 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   serves desktop queries and control, note and approval mutations from
   `src/graphql.rs`. Every request checks Host and any configured Tailscale
   login. GraphQL requests and the WebSocket also require a matching Origin.
+  The VNC WebSocket proxies to `vnc.sock` and parses the client's RFB
+  messages (`client_message`): it drops input messages unless the connection
+  owns the Take over, and sends the owner's input to its own RFB connection
+  to `vnc-control.sock` (`control_vnc`, opened at the first owned input,
+  replaying the last `SetEncodings`, its output discarded), so Take over input
+  arrives on `seat0`.
   Export the schema with `cargo run --quiet -- schema get-sdl --output text`.
   `make check` verifies the export against `schema.graphql`.
 
@@ -195,14 +214,14 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   long runtime directory.
 - `tests/two_seats.rs` drives the real path: it starts `sellaite mcp serve`,
   opens two `foot` terminals in the desktop, clicks, types and presses keys
-  through MCP, and checks with `swaymsg -t get_seats` that `seat0` keeps its
+  through MCP, and checks with `swaymsg -t get_seats` that `user` keeps its
   focus. `ctrl+l` and `Return` must arrive in the agent's terminal as `^L`
   and a newline, and `alt+Tab`, bound in sway to `focus right`, must move
   only the agent seat's focus. `nix build`
   runs it in the sandbox, so `nativeCheckInputs` carries `sway-unwrapped`,
   `grim` and `foot`, and `FONTCONFIG_FILE` points at a fixed font set.
 - `tests/launch.rs` launches foot with `wait_for_window`, checks that the
-  window has the agent seat's focus, types a command and presses `Return`
+  window, and a second one launched after it, has the agent seat's focus, types a command and presses `Return`
   with no sleep, and checks that `stop_desktop` ends foot, its shell and an
   orphaned `sleep`. Typing without the window wait loses the text, and the
   stop check fails when `stop_desktop` signals only the direct children.
@@ -223,18 +242,28 @@ clears the mask. Rust calls `chord`, `mask` and `Modifier.xkbName`.
   `xwayland` and `xterm`.
 - `tests/dashboard.rs` checks pause end to end: stale runtime directories
   are removed when `mcp serve` starts, the agent's `click`, `type` and `key`
-  leave `seat0` idle, a raw RFB client on `vnc.sock` that only connects does
+  leave `user` idle, a raw RFB client on `vnc.sock` that only connects does
   not pause, its pointer event pauses the agent, the input tools then return
   the pause error, and the dashboard's Resume and Stop work (and refuse a
   foreign `Origin` or `Host`). It fails when the agent's devices are bound to
-  `seat0`, when the watcher is bound to `agent`, and when the pause check is
-  removed. A resume or Give back requested while `seat0` is active stays
+  `user`, when the watcher watches only `seat0`, and when the pause check is
+  removed. A resume requested while `user` is active, or a Give back right
+  after the owner's input on `seat0`, stays
   queued only while the user's input keeps arriving within the 1 s idle
   timeout, which a loaded host cannot promise, so the test waits for the
   watcher to rewrite `paused` (a new inode) after its pointer event, and
   starts the step again, up to 20 times, when the queued resume ran because
-  `seat0` idled. `nix build` runs it too, so `nativeCheckInputs` carries `wayvnc`
+  the seat idled. `nix build` runs it too, so `nativeCheckInputs` carries `wayvnc`
   and the build sets `SELLAITE_NOVNC_DIR`.
+- `tests/dashboard.rs` also connects a Wayland client of its own
+  (`tests/first_seat`) that binds only the first `wl_seat`, as Chromium does,
+  maps a toplevel and records button and key presses. It checks that the
+  client's seat is `seat0`, that the agent's `click` and `type` reach it, that
+  after Take over the owner's pointer and key events sent through the
+  dashboard reach it and a spectator tab's do not, and that the agent's
+  `click` reaches it again after Give back. It fails with the agent's devices
+  on a seat other than the first and when the dashboard sends the owner's
+  input to `vnc.sock`.
 - `tests/dashboard.rs` also checks notes: with two desktops running, notes
   sent through `sellaite desktop create-note` (text and `file://`) and the
   dashboard arrive in order with the next tool call of their desktop only, a

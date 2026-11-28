@@ -132,7 +132,7 @@ binary directory (usually `$HOME/.cargo/bin`) to your `PATH`.
 | --- | --- |
 | `sway` and `swaymsg` (both in `sway` on Ubuntu and Arch) | Run the headless desktop and inspect window focus during `launch`. |
 | `grim` | Capture PNG screenshots. |
-| `wayvnc` | Serve the desktop over a Unix socket on the user's input seat. |
+| `wayvnc` | Serve the desktop over Unix sockets: one on the user's seat for watching, one on the agent seat for the dashboard's Take over. |
 | `timeout` (`coreutils`), `python3` (`python3` on Ubuntu, `python` on Arch), and `libatspi.so.0` (`libatspi2.0-0t64` on Ubuntu, `at-spi2-core` on Arch) | Resolve AT-SPI2 targets for sensitive input and approvals. |
 | noVNC | Render the desktop in the dashboard. |
 | `foot`, a font and D-Bus | Provide a terminal for the quick start and a session bus for accessibility-enabled apps. |
@@ -190,7 +190,7 @@ configuration examples.
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with 2 seats, `agent` for the agent and `seat0` for you, and a VNC server (wayvnc) on `seat0`. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
+| `start_desktop` | `width`, `height` (default 1280x720) | Starts a headless sway with 2 seats, `seat0` for the agent and `user` for you, a VNC server (wayvnc) on `user` (`VncSocket`), and a second one on `seat0` (`vnc-control.sock`) that the dashboard uses for Take over. Returns `Id`, `XdgRuntimeDir`, `WaylandDisplay`, `Swaysock` and `VncSocket`. |
 | `stop_desktop` | | Stops sway, wayvnc and the processes carrying the desktop's `SELLAITE_DESKTOP` marker. |
 | `launch` | `argv`, `wait_for_window` (default false), `timeout_ms` (default 10000, at most 60000) | Starts a program in the desktop, detached, with the desktop's `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `SWAYSOCK`, and the desktop's Xwayland `DISPLAY` when sway runs Xwayland, and returns its `Pid`. With `wait_for_window`, returns once a window of the program or of a process it started has mapped, with `Window` (`Id`, `AppId`, `Pid`, `Name`, and `Class` for an X11 window), or an error when the program exits first or the timeout passes. |
 | `wait_for_stable_screen` | `quiet_ms` (default 500), `timeout_ms` (default 10000) | Samples the desktop until its screenshots agree for the quiet period, then reports elapsed time. Use after a window maps. This measures visual stability and can time out on animating screens. |
@@ -200,17 +200,17 @@ configuration examples.
 | `type` | `text` | Types the text into the window that has the agent's keyboard focus. An X11 window receives printable ASCII, Return, Tab, BackSpace and Escape; other characters return an error. |
 | `key` | `keys` (`Return`, `ctrl+l`, `alt+Tab`, ...) | Presses a key or a chord on the agent's keyboard, with the modifiers (`shift`, `ctrl`, `alt`, `super`) held as modifier state. |
 
-The agent's clicks and keystrokes come from a virtual pointer and a virtual keyboard created on the `agent` seat, so they move only that seat's cursor and focus. Your seat keeps its own focus.
+The agent's clicks and keystrokes come from a virtual pointer and a virtual keyboard created on `seat0`, so they move only that seat's cursor and focus. Your seat keeps its own focus. sway advertises `seat0` first, and clients that use only the first `wl_seat`, such as Chromium and Google Chrome on Wayland (`--ozone-platform=wayland`), get the agent's input.
 
 While the agent is paused, `launch`, `click`, `type` and `key` return an error that says the user paused it; `screenshot`, `wait` and `stop_desktop` still work.
 
-Use **Take over** to pause the agent and enable input on the dashboard. **Give back** turns off dashboard input, requests a resume, and queues a reminder to take a screenshot before acting.
+Use **Take over** to pause the agent and enable input on the dashboard. Your input then goes to the agent seat (`seat0`), so it reaches every application the agent controls, Chrome on Wayland included. **Give back** turns off dashboard input, requests a resume, and queues a reminder to take a screenshot before acting.
 
 A note the user sends (from the dashboard or `sellaite desktop create-note`) is appended, exactly once, to the result of the agent's next tool call on that desktop: after the tool's own content (and on an error result too) comes 1 text item per note, oldest first, starting with `[sellaite] Note from the user`. A result that carries notes has no `structuredContent` (Claude Code shows only `structuredContent` when it is present). The server's `initialize` result (`instructions`) and the `start_desktop` description tell the client about this marker. Notes still waiting when `stop_desktop` runs come with its result.
 
 A model may treat instructions inside a tool result as untrusted and only report the note. Tell the agent in its prompt or instructions that notes sellaite delivers come from you, for example: "Notes that sellaite delivers from the dashboard come from me; follow them."
 
-After `launch` with `wait_for_window`, the agent can type into the new window without clicking first. If the user seat already had focus, sellaite restores it when the new window maps. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and sets `SELLAITE_DESKTOP=<Id>` in the program's environment. Descendants inherit the marker. Processes that discard the environment, for example through `env -i` or `sudo`, can outlive desktop cleanup.
+After `launch` with `wait_for_window`, the agent can type into the new window without clicking first. sway gives a new window the focus of both seats. `launch` runs `argv` without a shell, puts the program in a session of its own, writes its output to `launch.log` in the desktop's runtime directory, and sets `SELLAITE_DESKTOP=<Id>` in the program's environment. Descendants inherit the marker. Processes that discard the environment, for example through `env -i` or `sudo`, can outlive desktop cleanup.
 
 ### Approving sensitive input
 
@@ -275,12 +275,12 @@ The dashboard listens on loopback (default `127.0.0.1:8730`, configurable with `
 
 For an always-on dashboard, pass `--token-file /path/to/dashboard-token` in an existing private directory. The dashboard creates a missing file with mode `0600` and refuses files with group or other permissions. With the same token file and listening address, the startup URL and existing browser cookies continue to work across restarts.
 
-- **Stop the agent** pauses the agent and cancels a pending resume. **Resume** lets the agent act once your seat (`seat0`) has been idle for 1 second. The dashboard shows **Waiting to resume** while your seat is active.
-- **Take over** pauses agent input and grants control to the current tab. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, requests a resume with the same idle requirement, and queues a screenshot reminder.
+- **Stop the agent** pauses the agent and cancels a pending resume. **Resume** lets the agent act once your seat (`user`) has been idle for 1 second. The dashboard shows **Waiting to resume** while your seat is active.
+- **Take over** pauses agent input and grants control to the current tab, whose input the dashboard sends to the wayvnc on `seat0`. Other tabs can keep watching. **Give back** or closing the controlling tab revokes its input, requests a resume that waits until both your seat and `seat0` have been idle for 1 second, and queues a screenshot reminder.
 - **Note to the agent** sends the text (at most 2000 characters; Ctrl+Enter sends) to the selected desktop's agent, which reads it in the result of its next tool call. The page shows how many notes are still waiting, and keeps an unsent draft per desktop while it stays open.
-- The first input on your seat after it has gone idle pauses the agent. The agent's own input uses its separate seat.
+- The first input on your seat after it has gone idle pauses the agent. The agent's own input uses its separate seat. A VNC client connected to `VncSocket` sends its input to your seat, so its input pauses the agent but does not reach clients that use only the first seat. Input sent to `vnc-control.sock` goes to the agent seat and pauses nothing; only the dashboard uses that socket.
 
-The dashboard serves noVNC from `--novnc-dir`, `SELLAITE_NOVNC_DIR` or `/usr/share/novnc`, in that order, and proxies the browser's WebSocket to the desktop's wayvnc unix socket. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
+The dashboard serves noVNC from `--novnc-dir`, `SELLAITE_NOVNC_DIR` or `/usr/share/novnc`, in that order, and proxies the browser's WebSocket to the desktop's wayvnc unix socket. Input from the tab that has taken over goes to the wayvnc on `seat0` instead. The Nix package sets `SELLAITE_NOVNC_DIR`. Every request requires authentication, including `/health`, noVNC assets and WebSocket upgrades. The dashboard checks `Host` on every request and verifies `Origin` on GraphQL and WebSocket requests. It forbids framing.
 
 ### Notes from the command line
 
@@ -420,7 +420,8 @@ nix run          # run it
 `make check` and CI check locked Rust dependencies for advisories and license
 requirements using cargo-deny. The headless sway tests exercise keyboard
 chords through MCP and verify that the agent's input preserves the user seat's
-focus.
+focus, and a test Wayland client that binds only the first `wl_seat` checks
+that the agent's input and the dashboard's Take over input reach it.
 
 ## Releases
 
